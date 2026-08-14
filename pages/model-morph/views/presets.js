@@ -10,7 +10,7 @@
 // 全部动态文本 textContent / el()，防 XSS。
 // ==========================================================================
 import { bridge, t, el, showToast } from "../common.js";
-import { buildGroupSelect, buildProviderSelect } from "./shared.js";
+import { buildGroupSelect, buildProviderSelect, buildTagInput } from "./shared.js";
 
 const S = "pages.model-morph.presets";
 const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -70,6 +70,17 @@ function buildParamControl(param, controls) {
             return sel;
         };
         field.appendChild(chkBar);
+        return field;
+    }
+    // scope_* 限定参数：标签式输入（回车挂标签），提交时还原为逗号串
+    if (param.key && param.key.indexOf("scope_") === 0) {
+        const initial = String(param.default || "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+        let current = initial.slice();
+        field.appendChild(buildTagInput(initial, (arr) => { current = arr; }));
+        controls[param.key] = () => current.join(",");
         return field;
     }
     // string（name 文本 / date 日期）

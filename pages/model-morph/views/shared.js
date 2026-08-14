@@ -103,4 +103,71 @@ function buildLifecycleSelect(selectedId, allowEmpty = true) {
     return sel;
 }
 
-export { refData, refreshRefData, refreshGroupRefs, buildProviderSelect, buildGroupSelect, buildLifecycleSelect };
+// 标签式输入（限定群组等）：上方蓝底白字标签行 + 下方文本输入。
+// - 回车（或失焦）把当前输入追加为标签（去空白、去重）；
+// - 点标签上的 × 删除；输入为空时按 Backspace 删除最后一个标签；
+// - 每次增删回调 onChange(values: string[])，调用方自行保存状态。
+// 返回容器元素（tag-input）。
+function buildTagInput(initialValues, onChange) {
+    const box = el("div", "tag-input");
+    const chipsRow = el("div", "tag-chips");
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "tag-input-field";
+    input.placeholder = t("pages.model-morph.common.tag_add_hint", "输入后回车添加");
+
+    let values = (Array.isArray(initialValues) ? initialValues : []).slice();
+    const emit = () => { if (typeof onChange === "function") onChange(values.slice()); };
+
+    const renderChips = () => {
+        chipsRow.replaceChildren();
+        for (const v of values) {
+            const chip = el("span", "tag-chip", v);
+            const del = el("button", "tag-chip-x", "×");
+            del.type = "button";
+            del.addEventListener("click", () => {
+                values = values.filter((x) => x !== v);
+                emit();
+                renderChips();
+            });
+            chip.appendChild(del);
+            chipsRow.appendChild(chip);
+        }
+    };
+
+    const addChip = (raw) => {
+        const v = String(raw || "").trim();
+        if (!v || values.includes(v)) return;
+        values.push(v);
+        emit();
+        renderChips();
+    };
+
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            addChip(input.value);
+            input.value = "";
+        } else if (e.key === "Backspace" && !input.value) {
+            if (values.length) {
+                values.pop();
+                emit();
+                renderChips();
+            }
+        }
+    });
+    // 失焦兜底：残留文本自动挂为标签（点 × 等操作前先提交）。
+    input.addEventListener("blur", () => {
+        if (input.value.trim()) {
+            addChip(input.value);
+            input.value = "";
+        }
+    });
+
+    box.appendChild(chipsRow);
+    box.appendChild(input);
+    renderChips();
+    return box;
+}
+
+export { refData, refreshRefData, refreshGroupRefs, buildProviderSelect, buildGroupSelect, buildLifecycleSelect, buildTagInput };

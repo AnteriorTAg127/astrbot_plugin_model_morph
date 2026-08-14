@@ -7,6 +7,8 @@
 - 优先级常量：emergency(1000) / manual(500) / scheduled(200) / group(100) / default(0)。
   同一 (group, source_provider) 同时命中多条时，priority 高者生效（确定性）；
   同优先级按规则创建顺序（列表顺序）先者生效。
+- v1.0.1 scope 二段式：限定命中（scope 非空且匹配 meta）的规则先于全局（scope 全空）
+  规则生效；两段内各自按 priority 降序。见 resolve_model / resolve_group。
 - 时间判断语义与 rules.py 的 ``_eval_time_range`` 一致：HH:MM、``end<start`` 跨午夜、
   weekdays 0=周一；``schedule.timezone`` 非空时先把时间换算到该时区再比较。
 - 持久化依赖 T3 的 ``persistence v2`` 契约：``store.get_temporal_rules()`` /
@@ -23,6 +25,8 @@ import re
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from .scope import normalize_scope, scope_is_empty, scope_match
 
 logger = logging.getLogger("astrbot_plugin_model_morph")
 
@@ -43,10 +47,6 @@ _DAY_MINUTES = 24 * 60
 # ``HH:MM`` 正则（与 rules.py ``_HHMM_RE`` 一致）。
 _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 
-# scope 作用域键。
-_SCOPE_KEYS = ("groups", "users", "sessions")
-
-
 def _as_list(value) -> list:
     """把值规整为列表（None → []，标量 → [标量]）。"""
     if value is None:
@@ -54,11 +54,6 @@ def _as_list(value) -> list:
     if isinstance(value, (list, tuple)):
         return list(value)
     return [value]
-
-
-def _default_scope() -> dict:
-    """scope 默认结构（全部列表为空 = 不限制）。"""
-    return {"groups": [], "users": [], "sessions": []}
 
 
 def _default_schedule() -> dict:
@@ -108,14 +103,8 @@ def normalize_temporal_rule(raw: dict) -> dict:
     rule.setdefault("target_provider", "")
     rule.setdefault("target_group", "")
 
-    # scope：合并默认，三个键都规整为列表
-    scope = copy.deepcopy(_default_scope())
-    raw_scope = rule.get("scope")
-    if isinstance(raw_scope, dict):
-        for key in _SCOPE_KEYS:
-            if key in raw_scope:
-                scope[key] = _as_list(raw_scope.get(key))
-    rule["scope"] = scope
+    # scope：合并默认，三个键都规整为列表（shared scope 工具）。
+    rule["scope"] = normalize_scope(rule.get("scope"))
 
     # schedule：补齐默认结构
     schedule = copy.deepcopy(_default_schedule())
@@ -381,7 +370,9 @@ def find_conflicts(rules: list[dict]) -> list[dict]:
     """检测现有规则两两冲突，返回冲突描述列表。
 
     判定条件：同 kind、同 group_id、同 source（group_switch 时 source 取 group_id）、
-    时间窗重叠且去向（target）不同。每个冲突项形如
+    时间窗重叠且去向（target）不同。v1.0.1 起，一条「限定（scope 非空）」与一条
+    「全局（scope 全空）」分属不同优先级段（限定优先），**豁免**不再判冲突；
+    同段规则才按现逻辑判定。每个冲突项形如
     ``{"a": id, "b": id, "group_id", "source_provider", "kind", "note"}``：
     - 相同 priority → ``note = "priority_tie"``；
     - 不同 priority → 低者被遮蔽 → ``note = "shadowed"``（非错误）。
@@ -407,6 +398,9 @@ def find_conflicts(rules: list[dict]) -> list[dict]:
                 continue
             if _rule_target(a) == _rule_target(b):
                 continue
+            # v1.0.1 二段式：限定 vs 全局分属不同优先级段，不再互相遮蔽。
+            if scope_is_empty(a.get("scope")) != scope_is_empty(b.get("scope")):
+                continue
             a_id = a.get("id")
             b_id = b.get("id")
             if (a.get("priority", 0) or 0) == (b.get("priority", 0) or 0):
@@ -426,30 +420,34 @@ def find_conflicts(rules: list[dict]) -> list[dict]:
     return conflicts
 
 
-def _scope_match(rule: dict, meta: dict | None) -> bool:
-    """scope 过滤：meta 命中任一列表即生效，全空=不限制。
+def _pick_model_candidate(actives: list[dict], group_id: str, current: str, meta: dict):
+    """在时间生效规则中挑出替换候选（v1.0.1 二段式）。
 
-    Args:
-        rule: 规范化规则。
-        meta: 上下文 dict（group_id / sender_id / umo 等）。
+    过滤条件：kind=model_override、组匹配、source==current。随后：
+    - 限定段：scope 非空且 ``scope_match(scope, meta)`` 命中 → 按列表顺序（priority 降序）
+      取第一条，**立即返回**（限定段优先于全局段）；
+    - 全局段：scope 全空的规则中取第一条（同 priority 降序）。
 
     Returns:
-        是否在作用域内。
+        命中候选规则或 None。
     """
-    meta = meta or {}
-    scope = rule.get("scope") or {}
-    groups = _as_list(scope.get("groups"))
-    users = _as_list(scope.get("users"))
-    sessions = _as_list(scope.get("sessions"))
-    if not (groups or users or sessions):
-        return True
-    if groups and meta.get("group_id") in groups:
-        return True
-    if users and meta.get("sender_id") in users:
-        return True
-    if sessions and meta.get("umo") in sessions:
-        return True
-    return False
+    first_global: dict | None = None
+    for rule in actives:
+        if rule.get("kind") != "model_override":
+            continue
+        gid = rule.get("group_id", "")
+        if gid and gid != group_id:
+            continue
+        if rule.get("source_provider") != current:
+            continue
+        sc = rule.get("scope") or {}
+        if scope_is_empty(sc):
+            if first_global is None:
+                first_global = rule
+            continue
+        if scope_match(sc, meta):
+            return rule
+    return first_global
 
 
 class TemporalEngine:
@@ -843,8 +841,9 @@ class TemporalEngine:
     ) -> tuple:
         """对最终 Provider 执行 temporal 模型替换（链式，防环）。
 
-        取 active_rules 中 kind=model_override、组匹配、source==当前 provider、scope 命中
-        的规则，按 priority 降序取第一条应用；命中后以前者为起点继续链式替换，visited
+        取 active_rules 中 kind=model_override、组匹配、source==当前 provider 的规则，
+        按 v1.0.1 二段式挑选：限定命中（scope 非空且匹配 meta）先于全局（scope 全空），
+        段内按 priority 降序取第一条应用；命中后以前者为起点继续链式替换，visited
         集合防环——环时停止并在原因中标注「检测到替换环」。
 
         Args:
@@ -868,19 +867,7 @@ class TemporalEngine:
 
         while guard < max_steps:
             guard += 1
-            candidate: dict | None = None
-            for rule in actives:
-                if rule.get("kind") != "model_override":
-                    continue
-                gid = rule.get("group_id", "")
-                if gid and gid != group_id:
-                    continue
-                if rule.get("source_provider") != current:
-                    continue
-                if not _scope_match(rule, meta):
-                    continue
-                candidate = rule
-                break
+            candidate = _pick_model_candidate(actives, group_id, current, meta)
             if candidate is None:
                 break
             rid = candidate.get("id")
@@ -907,7 +894,8 @@ class TemporalEngine:
     ) -> tuple[str, dict | None]:
         """对最终组执行 temporal 整组切换（group_switch）。
 
-        取 active_rules 中 kind=group_switch、组匹配、scope 命中的最高优先级规则，
+        取 active_rules 中 kind=group_switch、组匹配的规则，按 v1.0.1 二段式挑选：
+        限定命中（scope 非空且匹配 meta）先于全局（scope 全空），段内按 priority 降序，
         命中则返回新组 id 并带上命中规则，否则返回原组 id。
 
         Args:
@@ -920,13 +908,20 @@ class TemporalEngine:
             ``(新 group_id 或原值, 命中规则|None)``。
         """
         actives = self.active_rules(now, tz, meta)
+        first_global: dict | None = None
         for rule in actives:
             if rule.get("kind") != "group_switch":
                 continue
             gid = rule.get("group_id", "")
             if gid and gid != group_id:
                 continue
-            if not _scope_match(rule, meta):
+            sc = rule.get("scope") or {}
+            if scope_is_empty(sc):
+                if first_global is None:
+                    first_global = rule
                 continue
-            return (rule.get("target_group") or group_id, rule)
+            if scope_match(sc, meta):
+                return (rule.get("target_group") or group_id, rule)
+        if first_global is not None:
+            return (first_global.get("target_group") or group_id, first_global)
         return (group_id, None)

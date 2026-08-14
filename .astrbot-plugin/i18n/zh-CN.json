@@ -3,13 +3,11 @@
     "model-morph": {
       "title": "Model Morph 调度器",
       "description": "可视化编排 AstrBot 模型自动调度：按时间、会话、群组、消息事件等条件自动切换模型 Provider。",
-
       "scope": {
         "schedule": "调度编排",
         "runtime": "运行状态",
         "tools": "工具"
       },
-
       "nav": {
         "dashboard": "总览",
         "groups": "模型组",
@@ -25,7 +23,6 @@
         "presets": "预设",
         "audit": "审计日志"
       },
-
       "common": {
         "refresh": "刷新",
         "save": "保存",
@@ -59,9 +56,9 @@
         "import_failed": "导入失败",
         "providers_failed": "Provider 列表加载失败",
         "invalid_json": "JSON 解析失败",
-        "this_plugin_rules_note": "Model Morph 允许规则级 scope 或条件命中对应群/用户/会话，实现不同群不同模型。"
+        "this_plugin_rules_note": "Model Morph 允许规则级 scope 或条件命中对应群/用户/会话，实现不同群不同模型。",
+        "tag_add_hint": "输入后回车添加"
       },
-
       "dashboard": {
         "title": "调度器总览",
         "status_card": "调度器状态",
@@ -89,9 +86,12 @@
         "active_temporal_empty": "当前无生效时段规则",
         "kind_group_switch": "整组切换",
         "kind_model_override": "模型替换",
-        "priority_short": "优先级"
+        "priority_short": "优先级",
+        "temporal_rule_count": "时段规则",
+        "calibration_sessions": "校准中会话",
+        "default_lifecycle": "默认生命周期",
+        "no_default_lifecycle": "未设置"
       },
-
       "groups": {
         "title": "模型组",
         "subtitle": "管理模型 Provider 组合与选择策略",
@@ -118,14 +118,13 @@
         "duplicate_group": "复制模型组",
         "delete_group": "删除模型组",
         "save_group": "保存模型组",
-
         "strategy_priority": "优先级 (priority)",
         "strategy_round_robin": "轮询 (round_robin)",
         "strategy_weighted": "权重随机 (weighted)",
         "strategy_random": "等权随机 (random)",
-        "strategy_fallback": "仅首可用+降级 (fallback)"
+        "strategy_fallback": "仅首可用+降级 (fallback)",
+        "member_notes": "备注"
       },
-
       "rules": {
         "title": "规则引擎",
         "subtitle": "按条件组合决定每个会话使用的模型组或 Provider",
@@ -154,7 +153,6 @@
         "comma_separated": "逗号分隔",
         "action_note": "规则命中后：本次及之后生效，不清空上下文",
         "no_rules": "暂无规则，点击“新建规则”开始编排",
-
         "cond_time_range": "时间区间",
         "cond_date_weekday": "日期/星期",
         "cond_scope": "作用域(群/用户/会话/平台)",
@@ -170,13 +168,11 @@
         "date_workday": "工作日",
         "date_weekend": "周末",
         "date_days": "星期列表",
-
         "action_switch_group": "切换到模型组",
         "action_switch_provider": "直选 Provider",
         "action_apply_lifecycle": "应用生命周期",
         "action_unlock": "解锁会话锁定"
       },
-
       "temporal": {
         "title": "时间调度规则",
         "new": "新建时间调度规则",
@@ -188,6 +184,7 @@
         "global_scope": "全局（任意组）",
         "replace": "替换设置",
         "source": "源模型",
+        "source_label": "来源",
         "target": "目标模型",
         "target_group": "目标组",
         "schedule": "时间安排",
@@ -213,9 +210,17 @@
         "save_success": "保存成功",
         "need_name": "请填写规则名称",
         "enabled_toast": "已启用",
-        "disabled_toast": "已停用"
+        "disabled_toast": "已停用",
+        "scope": "限定群组",
+        "scope_groups": "限定群组（逗号分隔，留空=全局）",
+        "scope_users": "限定用户（逗号分隔，留空=全局）",
+        "scope_sessions": "限定会话 UMO（逗号分隔，留空=全局）",
+        "scope_hint": "留空=全局规则；限定命中的规则优先于全局规则生效",
+        "scope_global": "全局",
+        "source_wizard": "向导",
+        "source_preset": "预设",
+        "source_manual": "手动"
       },
-
       "lifecycles": {
         "title": "生命周期策略",
         "subtitle": "按会话轮数编排 初始→主→周期 的模型轮转",
@@ -242,9 +247,16 @@
         "delete_lifecycle": "删除生命周期",
         "load_template": "载入模板",
         "template_hint": "模板提供名称与轮数，组字段载入后由你填写",
-        "enable_lifecycle": "启用"
+        "enable_lifecycle": "启用",
+        "mode": "模式",
+        "priority": "优先级",
+        "scope": "限定群组",
+        "scope_groups": "限定群组（逗号分隔，留空=全局）",
+        "scope_users": "限定用户（逗号分隔，留空=全局）",
+        "scope_sessions": "限定会话 UMO（逗号分隔，留空=全局）",
+        "scope_hint": "留空=全局策略；限定命中的策略优先于全局策略生效",
+        "scope_global": "全局"
       },
-
       "sessions": {
         "title": "活跃会话",
         "subtitle": "查看并手动控制每个会话的调度状态",
@@ -267,9 +279,14 @@
         "no_rule": "—",
         "confirmed_remove": "确认移除该会话的全部调度状态？",
         "confirmed_reset": "重置该会话的调度状态（round/stage 归零，保留锁定）？",
-        "need_lock_target": "请选择模型组或 Provider"
+        "need_lock_target": "请选择模型组或 Provider",
+        "calibration": "校准",
+        "detail": "详情",
+        "last_switch": "最近切换",
+        "cursor": "组游标",
+        "trace": "决策轨迹",
+        "lock_target": "锁定到"
       },
-
       "logs": {
         "title": "调度日志",
         "subtitle": "最近调度决策与错误记录",
@@ -290,7 +307,6 @@
         "confirm_clear": "确认清空全部调度日志？",
         "empty": "暂无日志"
       },
-
       "simulator": {
         "title": "调度模拟器",
         "subtitle": "Dry Run：输入会话上下文，预览命中规则与最终 Provider",
@@ -309,7 +325,7 @@
         "type_group": "群消息",
         "type_private": "私聊消息",
         "run": "模拟运行",
-        "result": "模拟结果",
+        "result": "结果",
         "matched_rule": "命中规则",
         "rejected_rules": "被拒绝规则",
         "final_provider": "最终 Provider",
@@ -319,10 +335,8 @@
         "elapsed_ms": "耗时",
         "skipped": "跳过调度",
         "condition": "条件",
-        "result": "结果",
         "no_matched_rule": "未命中任何规则"
       },
-
       "settings": {
         "title": "设置",
         "subtitle": "调度器全局设置与数据导入导出",
@@ -359,7 +373,6 @@
         "save": "保存设置",
         "export_file": "model-morph-config.json"
       },
-
       "assistant": {
         "title": "AI 配置助手",
         "placeholder": "描述你的调度需求，例如：每天晚上八点到凌晨两点用便宜模型…",
@@ -393,9 +406,10 @@
         "empty_history": "当前会话暂无消息，输入配置需求开始对话。",
         "message_count": "消息",
         "updated_at": "更新",
-        "no_title": "未命名会话"
+        "no_title": "未命名会话",
+        "created_at": "创建",
+        "last_preview": "预览"
       },
-
       "wizard": {
         "title": "调度规则配置向导",
         "step1": "步骤一 · 选择目标类型",
@@ -436,9 +450,13 @@
         "rule_name": "规则名",
         "confirm_hint": "请确认生成的规则：",
         "success": "规则已创建成功",
-        "save_failed": "保存失败"
+        "save_failed": "保存失败",
+        "scope_title": "限定群组（可选）",
+        "scope_groups": "限定群组（逗号分隔）",
+        "scope_users": "限定用户（逗号分隔）",
+        "scope_sessions": "限定会话 UMO（逗号分隔）",
+        "scope_hint": "留空=全局规则；限定命中的规则优先于全局规则生效"
       },
-
       "presets": {
         "title": "时间规则预设",
         "apply": "应用预设",
@@ -447,7 +465,6 @@
         "need_param": "请填写必填参数",
         "empty": "暂无预设"
       },
-
       "audit": {
         "title": "审计日志",
         "time": "时间",
@@ -473,7 +490,12 @@
         "result_failed": "失败",
         "result_preview": "预览",
         "result_rollback": "回滚",
-        "result_other": "—"
+        "result_other": "—",
+        "action_filter": "动作",
+        "expand": "展开",
+        "before": "修改前",
+        "after": "修改后",
+        "close": "关闭"
       }
     }
   }

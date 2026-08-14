@@ -1,6 +1,6 @@
 // ==========================================================================
 // Model Morph · AI 配置助手（views/assistant.js）— 会话驱动（v0.1.8）
-// 会话持久化：侧栏列出历史会话（标题/时间/条数/删除），聊天区渲染当前会话消息。
+// 会话持久化：侧栏列出历史会话（标题/时间/创建/预览/条数/删除），聊天区渲染当前会话消息。
 // - 侧栏：#assistantNewConv（新对话）+ #assistantConvList（会话列表）。
 // - 聊天区：assistant/user 气泡，纯文本 + white-space:pre-wrap（不支持 markdown，防 XSS）。
 // - pending 非空 → 聊天区下方「待应用更改」预览卡：逐条渲染 action/target/before/after/warnings
@@ -220,6 +220,10 @@ function convItem(conv) {
         `${t(`${S}.message_count`, "消息")}：${conv.message_count || 0}`));
     meta.appendChild(el("span", "conv-time",
         `${t(`${S}.updated_at`, "更新")}：${formatTime(conv.updated_at)}`));
+    meta.appendChild(el("span", "conv-count",
+        `${t(`${S}.created_at`, "创建")}：${formatTime(conv.created_at)}`));
+    meta.appendChild(el("span", "conv-preview",
+        `${t(`${S}.last_preview`, "预览")}：${((conv.last_preview || "").slice(0, 40)) || "—"}`));
     item.appendChild(meta);
 
     const del = el("button", "conv-delete", t(`${S}.delete_conversation`, "删除"));
