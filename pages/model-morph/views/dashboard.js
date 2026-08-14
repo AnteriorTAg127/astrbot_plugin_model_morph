@@ -1,6 +1,8 @@
 // ==========================================================================
 // Model Morph · 总览视图（views/dashboard.js）
-// 状态卡（enabled/debug/时区/Provider数/组数/规则数/会话数）+ 最近切换 + 最近错误。
+// 状态卡（enabled/debug/时区/Provider数/组数/规则数/生命周期数/会话数
+//   + 时段规则数/校准中会话/全局默认生命周期）+ 最近切换 + 最近错误。
+// 时段规则卡片包含 scope 摘要（限定:组/用户/会话）。
 // 全部动态文本走 textContent / el()，防 XSS；异步竞态用递增序号丢弃过期响应。
 // ==========================================================================
 import { bridge, t, el, showToast } from "../common.js";
@@ -16,6 +18,9 @@ const STAT_META = [
     { cls: "stat-blue", icon: "👥", key: "pages.model-morph.dashboard.group_count", get: (d) => d.group_count },
     { cls: "stat-purple", icon: "📐", key: "pages.model-morph.dashboard.rule_count", get: (d) => d.rule_count },
     { cls: "stat-green", icon: "🔁", key: "pages.model-morph.dashboard.lifecycle_count", get: (d) => d.lifecycle_count },
+    { cls: "stat-purple", icon: "⏱️", key: "pages.model-morph.dashboard.temporal_rule_count", get: (d) => d.temporal_rule_count },
+    { cls: "stat-orange", icon: "🧭", key: "pages.model-morph.dashboard.calibration_sessions", get: (d) => d.calibration_sessions },
+    { cls: "stat-green", icon: "🔄", key: "pages.model-morph.dashboard.default_lifecycle", get: (d) => d.default_lifecycle_name || t("pages.model-morph.dashboard.no_default_lifecycle", "未设置") },
     { cls: "stat-orange", icon: "📡", key: "pages.model-morph.dashboard.session_count", get: (d) => d.session_count },
 ];
 
@@ -141,7 +146,30 @@ function buildTemporalRules(rules) {
             dur = `${r.source_provider || ""} → ${r.target_provider || ""}`;
         }
         const timeTxt = [r.schedule_type, r.schedule_start, r.schedule_end].filter(Boolean).join(" ") || "";
-        item.appendChild(el("span", "temporal-active-time mono", `${dur}${timeTxt ? " · " + timeTxt : ""}`));
+        // scope 摘要：对象三键存在非空 → " · 限定:组x/用户y/会话z"（x/y/z 为非空长度，全空不加）
+        let scopeTxt = "";
+        if (r.scope && typeof r.scope === "object") {
+            const cnt = (k) => {
+                const v = r.scope[k];
+                if (v == null) return 0;
+                if (typeof v === "number") return v > 0 ? v : 0;
+                if (Array.isArray(v)) return v.length;
+                if (typeof v === "string") return v.trim() ? 1 : 0;
+                return 0;
+            };
+            const g = cnt("groups") || cnt("group_ids") || 0;
+            const u = cnt("users") || cnt("user_ids") || 0;
+            const z = cnt("sessions") || cnt("session_ids") || 0;
+            if (g || u || z) {
+                const parts = [];
+                if (g) parts.push("组" + g);
+                if (u) parts.push("用户" + u);
+                if (z) parts.push("会话" + z);
+                scopeTxt = " · 限定:" + parts.join("/");
+            }
+        }
+        const fullMeta = [dur, timeTxt, scopeTxt].filter(Boolean).join(" · ");
+        item.appendChild(el("span", "temporal-active-time mono", fullMeta));
         item.appendChild(el("span", "temporal-active-prio mono", t("pages.model-morph.dashboard.priority_short", "P") + " " + (r.priority ?? "")));
         wrap.appendChild(item);
     }

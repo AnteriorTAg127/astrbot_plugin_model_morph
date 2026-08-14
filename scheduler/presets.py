@@ -127,6 +127,27 @@ PRESETS: dict[str, dict] = {
                 "required": False,
                 "default": "",
             },
+            {
+                "key": "scope_groups",
+                "label": "限定群组（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_users",
+                "label": "限定用户（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_sessions",
+                "label": "限定会话 UMO（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
         ],
     },
     "night_saving": {
@@ -186,6 +207,27 @@ PRESETS: dict[str, dict] = {
                 "required": False,
                 "default": "",
             },
+            {
+                "key": "scope_groups",
+                "label": "限定群组（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_users",
+                "label": "限定用户（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_sessions",
+                "label": "限定会话 UMO（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
         ],
     },
     "workday_performance": {
@@ -241,6 +283,27 @@ PRESETS: dict[str, dict] = {
             {
                 "key": "name",
                 "label": "规则名",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_groups",
+                "label": "限定群组（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_users",
+                "label": "限定用户（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_sessions",
+                "label": "限定会话 UMO（逗号分隔，留空=全局）",
                 "type": "string",
                 "required": False,
                 "default": "",
@@ -318,6 +381,27 @@ PRESETS: dict[str, dict] = {
                 "required": False,
                 "default": "",
             },
+            {
+                "key": "scope_groups",
+                "label": "限定群组（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_users",
+                "label": "限定用户（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_sessions",
+                "label": "限定会话 UMO（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
         ],
     },
     "maintenance": {
@@ -391,9 +475,45 @@ PRESETS: dict[str, dict] = {
                 "required": False,
                 "default": "",
             },
+            {
+                "key": "scope_groups",
+                "label": "限定群组（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_users",
+                "label": "限定用户（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
+            {
+                "key": "scope_sessions",
+                "label": "限定会话 UMO（逗号分隔，留空=全局）",
+                "type": "string",
+                "required": False,
+                "default": "",
+            },
         ],
     },
 }
+
+
+def _scope_from_params(params: dict) -> dict:
+    """按 params 的 scope_groups/scope_users/scope_sessions 生成 scope（v1.0.1）。
+
+    三个可选参数均为「逗号分隔」字符串；trim / 去空项后成列表，全空 = 全局规则。
+    """
+    def _split(key: str) -> list:
+        return [p.strip() for p in str(params.get(key) or "").split(",") if p.strip()]
+
+    return {
+        "groups": _split("scope_groups"),
+        "users": _split("scope_users"),
+        "sessions": _split("scope_sessions"),
+    }
 
 
 def _make_rule(
@@ -404,11 +524,11 @@ def _make_rule(
     target_provider: str,
     name_suffix: str = "",
 ) -> dict:
-    """构造一条标准 temporal rule dict（默认值 200，scope 全空=全局）。
+    """构造一条标准 temporal rule dict（默认值 200；scope 由 params 的限定参数生成）。
 
     Args:
         preset: PRESETS 中的元信息（提供 name / kind）。
-        params: 调用方参数（含 group_id / priority / name 等）。
+        params: 调用方参数（含 group_id / priority / name / scope_* 等）。
         schedule: 完整的 schedule dict。
         source_provider / target_provider: 替换源/目标模型。
         name_suffix: 追加到规则名的后缀（用于区分互补规则）。
@@ -426,7 +546,7 @@ def _make_rule(
         "source_provider": str(source_provider or ""),
         "target_provider": str(target_provider or ""),
         "target_group": "",
-        "scope": {"groups": [], "users": [], "sessions": []},
+        "scope": _scope_from_params(params),
         "schedule": copy.deepcopy(schedule),
         "priority": _to_int(params.get("priority"), DEFAULT_PRIORITY),
         "metadata": {"created_by": "", "created_at": "", "source": "preset"},

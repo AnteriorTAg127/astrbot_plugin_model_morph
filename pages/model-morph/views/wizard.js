@@ -2,12 +2,14 @@
 // Model Morph · 配置向导视图（views/wizard.js，六步向导，动态渲染，不需要新后端接口）
 // 步骤：
 //   1 目标类型（radio 卡）→ 2 模型组（group 下拉）→ 3 原模型（provider，仅 model_override）
-//   → 4 替代模型(provider) 或 目标组(group，切组类型) → 5 时间设置 → 6 确认(预览 JSON)
+//   → 4 替代模型(provider) 或 目标组(group，切组类型) → 5 时间设置 + 限定群组（可选） → 6 确认(预览 JSON)
 // 完成后 apiPost("temporal/save", rule)，toast 成功并重置向导。
 // 生成的 temporal rule dict 字段名严格按 v0.1.5 一致契约：
 //   {name, enabled, kind, group_id, source_provider, target_provider, target_group,
 //    scope:{groups:[],users:[],sessions:[]}, schedule:{type,start,end,weekdays,date,timezone:""},
 //    priority, metadata:{created_by:"wizard", created_at:<ISO>, source:"wizard"}}
+// scope 二段式语义：groups / users / sessions 为逗号分隔字符串解析后的数组；
+//   三者均留空 = 全局规则；限定（命中任意一个元素）的规则优先于全局规则生效。
 // 路由：POST temporal/save（与模块 T6 注册一致）。
 // 全部动态文本 textContent / el()，防 XSS。
 // ==========================================================================
@@ -42,6 +44,10 @@ let state = {
     date: "",
     priority: 200,
     name: "",
+    // 限定群组（可选，逗号分隔文本，留空=全局）
+    scopeGroups: "",
+    scopeUsers: "",
+    scopeSessions: "",
 };
 
 const WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
@@ -307,6 +313,28 @@ function renderStep5() {
     nameWrap.appendChild(nameInp);
     box.appendChild(nameWrap);
 
+    // 限定群组（可选）
+    const scopeTitle = el("div", "form-field-label", t(`${S}.scope_title`, "限定群组（可选）"));
+    box.appendChild(scopeTitle);
+    const scopeHint = el("div", "hint", t(`${S}.scope_hint`, "留空=全局规则；限定命中的规则优先于全局规则生效"));
+    box.appendChild(scopeHint);
+
+    const scopeFields = [
+        { key: "scopeGroups", keyTitle: "scope_groups", label: t(`${S}.scope_groups`, "限定群组（逗号分隔）") },
+        { key: "scopeUsers", keyTitle: "scope_users", label: t(`${S}.scope_users`, "限定用户（逗号分隔）") },
+        { key: "scopeSessions", keyTitle: "scope_sessions", label: t(`${S}.scope_sessions`, "限定会话（逗号分隔）") },
+    ];
+    for (const sf of scopeFields) {
+        const wrap = el("div", "form-field");
+        wrap.appendChild(el("label", null, sf.label));
+        const inp = document.createElement("input");
+        inp.type = "text"; inp.className = "input";
+        inp.value = state[sf.key];
+        inp.addEventListener("input", () => { state[sf.key] = inp.value; });
+        wrap.appendChild(inp);
+        box.appendChild(wrap);
+    }
+
     return box;
 }
 
@@ -325,6 +353,7 @@ function validateTime() {
 // ===== 步骤6：确认预览 =====
 function buildRule() {
     const isGroup = state.type.kind === "group_switch";
+    const splitList = (s) => String(s || "").split(",").map((x) => x.trim()).filter(Boolean);
     const rule = {
         name: state.name,
         enabled: true,
@@ -333,7 +362,11 @@ function buildRule() {
         source_provider: isGroup ? "" : state.source_provider,
         target_provider: isGroup ? "" : state.target_provider,
         target_group: isGroup ? state.target_group : "",
-        scope: { groups: [], users: [], sessions: [] },
+        scope: {
+            groups: splitList(state.scopeGroups),
+            users: splitList(state.scopeUsers),
+            sessions: splitList(state.scopeSessions),
+        },
         schedule: {
             type: state.schedType,
             start: state.start,
@@ -397,6 +430,9 @@ function reset() {
         date: "",
         priority: 200,
         name: "",
+        scopeGroups: "",
+        scopeUsers: "",
+        scopeSessions: "",
     };
 }
 

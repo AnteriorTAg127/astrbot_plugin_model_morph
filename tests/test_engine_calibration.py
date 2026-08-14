@@ -2,7 +2,8 @@
 
 覆盖：default_lifecycle 回退（首轮即用全局生命周期组、不存在时回退 base_group、
 state.lifecycle_id 被记住）、校准覆盖与递减、锁定优先于校准、校准 + temporal 替换、
-旧快照 restore（无校准字段）、dashboard 新字段。
+旧快照 restore（无校准字段）、dashboard 新字段、v1.0.1 全局生命周期按优先级
+优先于 default_lifecycle 指针。
 """
 
 from conftest import FakeAdapter, make_engine, make_store, meta_f, run
@@ -84,9 +85,12 @@ def _staged_lifecycle():
     }
 
 
-def _setup_engine(default_lifecycle=None, base_group=""):
+def _setup_engine(default_lifecycle=None, base_group="", lifecycles=None):
     """返回一个带 staged 生命周期与若干组（g_s1/g_s2/g_cal/g_final/g_locked）
     的引擎；default_lifecycle / base_group 可配置。
+
+    v1.0.1：``lifecycles`` 可显式指定（None = 默认带一个全局 staged 生命周期；
+    [] = 无生命周期，用于测试 default_lifecycle/base_group 兜底路径）。
     """
     store = make_store()
     cfg = store.load()
@@ -97,7 +101,7 @@ def _setup_engine(default_lifecycle=None, base_group=""):
         _group("g_final", "prov-d"),
         _group("g_locked", "prov-a"),
     ]
-    cfg["lifecycles"] = [_staged_lifecycle()]
+    cfg["lifecycles"] = [_staged_lifecycle()] if lifecycles is None else lifecycles
     if default_lifecycle:
         cfg["settings"]["default_lifecycle"] = default_lifecycle
     if base_group:
@@ -125,9 +129,9 @@ def test_default_lifecycle_used_and_remembered():
 
 
 def test_default_lifecycle_falls_back_to_base_group():
-    """default_lifecycle 指向不存在的组 → 说明原因并回退 base_group。"""
+    """default_lifecycle 指向不存在的组且无全局生命周期 → 说明原因并回退 base_group。"""
     engine, adapter, store, states, slog = _setup_engine(
-        default_lifecycle="lc_nonexist", base_group="g_s2"
+        default_lifecycle="lc_nonexist", base_group="g_s2", lifecycles=[]
     )
     t = run(engine.resolve(meta_f(umo=UMO)))
     assert t.final_group_id == "g_s2"
@@ -140,13 +144,26 @@ def test_default_lifecycle_falls_back_to_base_group():
 
 
 def test_default_lifecycle_nonexistent_and_no_base_inherits():
-    """default_lifecycle 不存在且无 base_group → 不干预（继承原生），不崩溃。"""
+    """default_lifecycle 不存在、无全局生命周期且无 base_group → 不干预（继承原生），不崩溃。"""
     engine, adapter, store, states, slog = _setup_engine(
-        default_lifecycle="lc_nonexist"
+        default_lifecycle="lc_nonexist", lifecycles=[]
     )
     t = run(engine.resolve(meta_f(umo=UMO)))
     assert t.final_provider_id is None
     assert "继承原生" in t.reason
+
+
+def test_global_lifecycle_priority_over_default_lifecycle():
+    """v1.0.1：存在全局生命周期时按其生效，优先级高于 default_lifecycle 指针。"""
+    engine, adapter, store, states, slog = _setup_engine(
+        default_lifecycle="lc_nonexist", base_group="g_s2"
+    )
+    t = run(engine.resolve(meta_f(umo=UMO)))
+    # match_global → lc_staged（全局、priority 0）→ round 0 → g_s1
+    assert t.final_group_id == "g_s1"
+    assert t.final_provider_id == "prov-a"
+    st = run(states.get(UMO))
+    assert st.lifecycle_id == "lc_staged"
 
 
 def test_calibration_override_and_decrement():

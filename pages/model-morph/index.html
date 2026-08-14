@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Model Morph</title>
-    <link rel="stylesheet" href="./style.css?v=1.0.0">
+    <link rel="stylesheet" href="./style.css?v=1.0.1">
 </head>
 <body>
     <div class="app">
@@ -159,9 +159,11 @@
                                 <th data-i18n="pages.model-morph.common.name">名称</th>
                                 <th data-i18n="pages.model-morph.temporal.kind">类型</th>
                                 <th data-i18n="pages.model-morph.temporal.group">作用组</th>
+                                <th data-i18n="pages.model-morph.temporal.scope">限定群组</th>
                                 <th data-i18n="pages.model-morph.temporal.replace">替换</th>
                                 <th data-i18n="pages.model-morph.temporal.schedule">时间段</th>
                                 <th data-i18n="pages.model-morph.temporal.priority">优先级</th>
+                                <th data-i18n="pages.model-morph.temporal.source_label">来源</th>
                                 <th data-i18n="pages.model-morph.common.enabled">启用</th>
                                 <th data-i18n="pages.model-morph.common.actions">操作</th>
                             </tr>
@@ -192,9 +194,12 @@
                         <thead>
                             <tr>
                                 <th data-i18n="pages.model-morph.common.name">名称</th>
+                                <th data-i18n="pages.model-morph.lifecycles.mode">模式</th>
                                 <th data-i18n="pages.model-morph.lifecycles.initial_group">初始组</th>
                                 <th data-i18n="pages.model-morph.lifecycles.main_group">主组</th>
                                 <th data-i18n="pages.model-morph.lifecycles.periodic_group">周期组</th>
+                                <th data-i18n="pages.model-morph.lifecycles.priority">优先级</th>
+                                <th data-i18n="pages.model-morph.lifecycles.scope">限定群组</th>
                                 <th data-i18n="pages.model-morph.common.enabled">启用</th>
                                 <th data-i18n="pages.model-morph.common.actions">操作</th>
                             </tr>
@@ -233,6 +238,7 @@
                                 <th data-i18n="pages.model-morph.sessions.stage">阶段</th>
                                 <th data-i18n="pages.model-morph.sessions.lifecycle">生命周期</th>
                                 <th data-i18n="pages.model-morph.sessions.rule">命中规则</th>
+                                <th data-i18n="pages.model-morph.sessions.calibration">校准</th>
                                 <th data-i18n="pages.model-morph.sessions.locked">锁定</th>
                                 <th data-i18n="pages.model-morph.common.actions">操作</th>
                             </tr>
@@ -359,6 +365,10 @@
                             <option value="system" data-i18n="pages.model-morph.audit.src_system">系统</option>
                         </select>
                     </div>
+                    <div class="filter-group">
+                        <label data-i18n="pages.model-morph.audit.action_filter">动作</label>
+                        <input type="text" id="auditAction" class="input" placeholder="动作名，留空全部">
+                    </div>
                 </div>
                 <div class="table-wrap">
                     <table class="table">
@@ -480,6 +490,6 @@
     <!-- Toast -->
     <div id="toast" class="toast"></div>
 
-    <script type="module" src="./app.js?v=1.0.0"></script>
+    <script type="module" src="./app.js?v=1.0.1"></script>
 </body>
 </html>

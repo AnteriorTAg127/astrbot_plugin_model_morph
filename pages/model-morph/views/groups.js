@@ -1,6 +1,7 @@
 // ==========================================================================
 // Model Morph · 模型组视图（views/groups.js）
 // 列表（启停 + 编辑/复制/删除）+ 新建/编辑面板：策略下拉、成员表格、fallbacks 多选。
+// 成员数单元格：数字 + 备注 hint 摘要（取自各成员 note，截断 24 字符）。
 // 全部动态文本走 textContent / el()，防 XSS。删除为破坏性操作 → confirmDialog()。
 // ==========================================================================
 import { bridge, t, el, showToast, confirmDialog } from "../common.js";
@@ -54,7 +55,18 @@ function paintList(groups) {
         row.appendChild(nameCell);
         row.appendChild(el("td", "mono", g.id));
         row.appendChild(el("td", null, strategyLabel(g.strategy)));
-        row.appendChild(el("td", null, String((g.providers || []).length)));
+        const memCell = el("td");
+        memCell.appendChild(el("span", null, String((g.providers || []).length)));
+        const notes = (g.providers || [])
+            .map((m) => (m.note || "").trim())
+            .filter(Boolean);
+        if (notes.length) {
+            const joined = notes.join(" / ");
+            memCell.appendChild(el("div", "hint",
+                t("pages.model-morph.groups.member_notes", "备注") + "：" +
+                joined.slice(0, 24) + (joined.length > 24 ? "…" : "")));
+        }
+        row.appendChild(memCell);
         row.appendChild(el("td")).appendChild(stateBadge(g.enabled));
         row.appendChild(el("td")).appendChild(groupActionsRow(g));
         body.appendChild(row);

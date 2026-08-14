@@ -243,7 +243,7 @@ class SchedulerEngine:
 
             # 7/8/9. 覆盖顺序 → 确定 group 与 provider
             group_id, direct_provider, reason, stage, lifecycle_used = self._decide(
-                state, matched_rule, settings
+                state, matched_rule, settings, meta
             )
 
             # 9a. 校准覆盖：仅当组来自生命周期解析（未被锁定/规则直选覆盖）且会话
@@ -411,7 +411,7 @@ class SchedulerEngine:
             if changed:
                 changes["current_provider_id"] = final_provider_id
                 changes["current_group_id"] = group_id
-                changes["last_switch_at"] = time.monotonic()
+                changes["last_switch_at"] = time.time()
                 changes["last_rule_id"] = last_rule_id
                 changes["last_trace"] = dict(trace.to_dict())
             await self._states.update(umo, **changes)
@@ -439,20 +439,24 @@ class SchedulerEngine:
     # ------------------------------------------------------------------ #
 
     def _decide(
-        self, state: SessionState, matched_rule, settings: dict
+        self, state: SessionState, matched_rule, settings: dict, meta: dict | None = None
     ) -> tuple[str | None, str | None, str, str | None, bool]:
         """按覆盖顺序确定本次应使用的模型组或直选 Provider。
 
-        优先级（v0.1.6 全序）：
+        优先级（v0.1.6 全序，v1.0.1 生命周期分支扩展）：
         ``(unlock 解除锁) > 命中规则动作 > 会话锁定 > 校准阶段(在 resolve 判定) >
         生命周期 > default_lifecycle > base_group > 不干预``。
-        校准阶段不在这里判定，而是由 ``_calibration_override`` 在组已落入生命周期
-        分支时覆盖（因此组在本方法中仍按 lifecycle/base_group 求值）。
+        生命周期分支 v1.0.1 起按「限定群组」二段式自动选择：
+        ``限定命中(match_scoped) > 会话已绑定策略 > 全局(match_global，按 priority) >
+        default_lifecycle``。校准阶段不在这里判定，而是由 ``_calibration_override``
+        在组已落入生命周期分支时覆盖（因此组在本方法中仍按 lifecycle/base_group 求值）。
 
         Args:
             state: 会话状态（锁定字段 / lifecycle_id 会被读写）。
             matched_rule: 命中的最高优先级规则（可为 None）。
             settings: 插件设置（含 base_group / default_lifecycle）。
+            meta: 会话上下文 dict（``group_id`` / ``sender_id`` / ``umo``），
+                供生命周期限定群组匹配；None 时按空处理。
 
         Returns:
             ``(group_id, direct_provider, reason, stage, lifecycle_used)``。
@@ -505,34 +509,51 @@ class SchedulerEngine:
 
         # 未命中任何组/直选：按 生命周期 → default_lifecycle → base_group → 不干预
         if group_id is None and direct_provider is None:
-            if state.lifecycle_id:
+            # v1.0.1 二段式：限定命中(match_scoped) > 会话已绑定策略 > 全局(match_global，
+            # 按 priority) > default_lifecycle（旧回退）。限定命中覆盖已绑定的全局策略。
+            scoped_lc = self._lifecycles.match_scoped(meta)
+            if scoped_lc is not None:
+                state.lifecycle_id = scoped_lc["id"]
+                group_id, stage, reason = self._resolve_lifecycle(
+                    scoped_lc["id"], state
+                )
+                lifecycle_used = True
+            elif state.lifecycle_id:
                 group_id, stage, reason = self._resolve_lifecycle(
                     state.lifecycle_id, state
                 )
                 lifecycle_used = True
-            elif settings.get("default_lifecycle"):
-                dfl = str(settings["default_lifecycle"] or "")
-                if dfl:
-                    # 全局默认生命周期：记住到 state.lifecycle_id（随 changes 持久化），
-                    # 直接以 dfl 为入参解析（_resolve_lifecycle 不依赖 state.lifecycle_id）。
-                    state.lifecycle_id = dfl
-                    group_id, stage, reason = self._resolve_lifecycle(dfl, state)
-                    if group_id is not None:
-                        lifecycle_used = True
-                    else:
-                        # 组不存在/禁用 → 说明原因并落到 base_group 分支，不算生命周期命中。
-                        fallback_note = f"default_lifecycle {dfl} 无法使用：{reason}"
-                        if settings.get("base_group"):
-                            bg = str(settings["base_group"])
-                            group_id = bg
-                            reason = f"{fallback_note}；回退 base_group {bg}"
-                        else:
-                            reason = f"{fallback_note}；无 base_group，继承原生行为"
-            elif settings.get("base_group"):
-                group_id = settings["base_group"]
-                reason = f"使用 base_group {group_id}"
             else:
-                reason = "inherit native behavior"
+                global_lc = self._lifecycles.match_global()
+                if global_lc is not None:
+                    state.lifecycle_id = global_lc["id"]
+                    group_id, stage, reason = self._resolve_lifecycle(
+                        global_lc["id"], state
+                    )
+                    lifecycle_used = True
+                elif settings.get("default_lifecycle"):
+                    dfl = str(settings["default_lifecycle"] or "")
+                    if dfl:
+                        # 全局默认生命周期：记住到 state.lifecycle_id（随 changes 持久化），
+                        # 直接以 dfl 为入参解析（_resolve_lifecycle 不依赖 state.lifecycle_id）。
+                        state.lifecycle_id = dfl
+                        group_id, stage, reason = self._resolve_lifecycle(dfl, state)
+                        if group_id is not None:
+                            lifecycle_used = True
+                        else:
+                            # 组不存在/禁用 → 说明原因并落到 base_group 分支，不算生命周期命中。
+                            fallback_note = f"default_lifecycle {dfl} 无法使用：{reason}"
+                            if settings.get("base_group"):
+                                bg = str(settings["base_group"])
+                                group_id = bg
+                                reason = f"{fallback_note}；回退 base_group {bg}"
+                            else:
+                                reason = f"{fallback_note}；无 base_group，继承原生行为"
+                elif settings.get("base_group"):
+                    group_id = settings["base_group"]
+                    reason = f"使用 base_group {group_id}"
+                else:
+                    reason = "inherit native behavior"
 
         return group_id, direct_provider, reason, stage, lifecycle_used
 
@@ -655,8 +676,15 @@ class SchedulerEngine:
         settings = self._store.get_settings()
         available_ids = self._adapter.provider_ids()
 
+        # sim_meta：限定群组（scope）匹配用上下文（group_id/sender_id/umo 取自 payload）。
+        sim_meta = {
+            "group_id": str(payload.get("group_id") or ""),
+            "sender_id": str(payload.get("sender_id") or ""),
+            "umo": umo,
+        }
+
         group_id, direct_provider, reason, stage, lifecycle_used = self._decide(
-            temp, eval_result.get("matched_rule"), settings
+            temp, eval_result.get("matched_rule"), settings, sim_meta
         )
         # 校准覆盖（simulate 为只读推演，不递减轮数，与 resolve 的选组语义一致）。
         group_id, stage, reason, _applied = self._calibration_override(
@@ -673,11 +701,6 @@ class SchedulerEngine:
             final_provider_id = provider
 
         # temporal 层：与 resolve 相同的两层（整组切换 → 模型替换），用 payload 的 now/meta 推演。
-        sim_meta = {
-            "group_id": str(payload.get("group_id") or ""),
-            "sender_id": str(payload.get("sender_id") or ""),
-            "umo": umo,
-        }
         temporal_matched: dict | None = None
         temporal_group_match: dict | None = None
         replacement_chain: list = []
@@ -791,12 +814,21 @@ class SchedulerEngine:
                     "source_provider": rule.get("source_provider", ""),
                     "target_provider": rule.get("target_provider", ""),
                     "target_group": rule.get("target_group", ""),
+                    "scope": copy.deepcopy(rule.get("scope") or {}),
                     "schedule_type": sch.get("type", ""),
                     "schedule_start": sch.get("start", ""),
                     "schedule_end": sch.get("end", ""),
                     "priority": rule.get("priority", 0),
                 }
             )
+        # 默认生命周期名（供前端展示；未设置/不存在 → 空串）。
+        default_lifecycle_id = str(settings.get("default_lifecycle", "") or "")
+        default_lifecycle_name = ""
+        if default_lifecycle_id:
+            for lc in lifecycles:
+                if lc.get("id") == default_lifecycle_id:
+                    default_lifecycle_name = str(lc.get("name") or lc.get("id") or "")
+                    break
         return {
             "enabled": self._adapter.is_enabled(),
             "debug": self._adapter.is_debug(),
@@ -805,7 +837,8 @@ class SchedulerEngine:
             "group_count": len(groups),
             "rule_count": len(rules),
             "lifecycle_count": len(lifecycles),
-            "default_lifecycle": str(settings.get("default_lifecycle", "") or ""),
+            "default_lifecycle": default_lifecycle_id,
+            "default_lifecycle_name": default_lifecycle_name,
             "calibration_sessions": calibration_sessions,
             "temporal_rule_count": temporal_rule_count,
             "active_temporal_rules": active_temporal_rules,

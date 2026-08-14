@@ -56,7 +56,7 @@ except Exception:  # noqa: BLE001
     "astrbot_plugin_model_morph",
     "ModelMorph",
     "模型自动调度器：按时间/会话/规则自动切换 LLM Provider",
-    "1.0.0",
+    "1.0.1",
 )
 class ModelMorph(Star):
     """模型自动调度器：按会话（UMO）隔离地自动切换聊天 Provider。

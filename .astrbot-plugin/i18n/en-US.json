@@ -3,13 +3,11 @@
     "model-morph": {
       "title": "Model Morph Scheduler",
       "description": "Visually orchestrate AstrBot automatic model scheduling: switch model providers by time, session, group, message events and more.",
-
       "scope": {
         "schedule": "Scheduling",
         "runtime": "Runtime",
         "tools": "Tools"
       },
-
       "nav": {
         "dashboard": "Overview",
         "groups": "Groups",
@@ -25,7 +23,6 @@
         "presets": "Presets",
         "audit": "Audit Log"
       },
-
       "common": {
         "refresh": "Refresh",
         "save": "Save",
@@ -61,7 +58,6 @@
         "invalid_json": "Invalid JSON",
         "this_plugin_rules_note": "Model Morph lets rules match specific groups/users/sessions via scope to give each group its own model."
       },
-
       "dashboard": {
         "title": "Scheduler Overview",
         "status_card": "Scheduler Status",
@@ -89,9 +85,12 @@
         "active_temporal_empty": "No time rules are active",
         "kind_group_switch": "Group switch",
         "kind_model_override": "Model override",
-        "priority_short": "Priority"
+        "priority_short": "Priority",
+        "temporal_rule_count": "Temporal rules",
+        "calibration_sessions": "Calibrating sessions",
+        "default_lifecycle": "Default lifecycle",
+        "no_default_lifecycle": "Not set"
       },
-
       "groups": {
         "title": "Model Groups",
         "subtitle": "Manage model provider combinations and selection strategies",
@@ -118,14 +117,13 @@
         "duplicate_group": "Duplicate group",
         "delete_group": "Delete group",
         "save_group": "Save group",
-
         "strategy_priority": "Priority",
         "strategy_round_robin": "Round robin",
         "strategy_weighted": "Weighted random",
         "strategy_random": "Equal random",
-        "strategy_fallback": "First available + fallback"
+        "strategy_fallback": "First available + fallback",
+        "member_notes": "Notes"
       },
-
       "rules": {
         "title": "Rule Engine",
         "subtitle": "Combine conditions to decide which group or provider each session uses",
@@ -154,7 +152,6 @@
         "comma_separated": "comma separated",
         "action_note": "Once a rule matches: effective now and onward, context is kept",
         "no_rules": "No rules yet. Click \"New rule\" to start",
-
         "cond_time_range": "Time range",
         "cond_date_weekday": "Date / weekday",
         "cond_scope": "Scope (group/user/session/platform)",
@@ -170,13 +167,11 @@
         "date_workday": "Workday",
         "date_weekend": "Weekend",
         "date_days": "Weekday list",
-
         "action_switch_group": "Switch to group",
         "action_switch_provider": "Set provider",
         "action_apply_lifecycle": "Apply lifecycle",
         "action_unlock": "Unlock session"
       },
-
       "temporal": {
         "title": "Time Scheduling Rules",
         "new": "New time rule",
@@ -188,6 +183,7 @@
         "global_scope": "Global (any group)",
         "replace": "Replacement",
         "source": "Source model",
+        "source_label": "Source",
         "target": "Target model",
         "target_group": "Target group",
         "schedule": "Schedule",
@@ -213,9 +209,17 @@
         "save_success": "Saved",
         "need_name": "Please provide a rule name",
         "enabled_toast": "Enabled",
-        "disabled_toast": "Disabled"
+        "disabled_toast": "Disabled",
+        "scope": "Scope",
+        "scope_groups": "Groups (comma-separated, empty=global)",
+        "scope_users": "Users (comma-separated, empty=global)",
+        "scope_sessions": "Sessions UMO (comma-separated, empty=global)",
+        "scope_hint": "Empty=global; scoped rules take precedence over global rules",
+        "scope_global": "Global",
+        "source_wizard": "Wizard",
+        "source_preset": "Preset",
+        "source_manual": "Manual"
       },
-
       "lifecycles": {
         "title": "Lifecycle Strategies",
         "subtitle": "Orchestrate Initial → Main → Periodic model rotation by session round",
@@ -242,9 +246,16 @@
         "delete_lifecycle": "Delete lifecycle",
         "load_template": "Load template",
         "template_hint": "Templates provide name and rounds; fill the group fields after loading",
-        "enable_lifecycle": "Enabled"
+        "enable_lifecycle": "Enabled",
+        "mode": "Mode",
+        "priority": "Priority",
+        "scope": "Scope",
+        "scope_groups": "Groups (comma-separated, empty=global)",
+        "scope_users": "Users (comma-separated, empty=global)",
+        "scope_sessions": "Sessions UMO (comma-separated, empty=global)",
+        "scope_hint": "Empty=global; scoped policies take precedence over global ones",
+        "scope_global": "Global"
       },
-
       "sessions": {
         "title": "Active Sessions",
         "subtitle": "View and manually control each session's scheduling state",
@@ -267,9 +278,14 @@
         "no_rule": "—",
         "confirmed_remove": "Remove all scheduling state for this session?",
         "confirmed_reset": "Reset this session's scheduling state (round/stage to zero, keep lock)?",
-        "need_lock_target": "Select a group or provider"
+        "need_lock_target": "Select a group or provider",
+        "calibration": "Calibration",
+        "detail": "Detail",
+        "last_switch": "Last switch",
+        "cursor": "Group cursor",
+        "trace": "Decision trace",
+        "lock_target": "Locked to"
       },
-
       "logs": {
         "title": "Scheduler Logs",
         "subtitle": "Recent scheduling decisions and errors",
@@ -290,7 +306,6 @@
         "confirm_clear": "Clear all scheduler logs?",
         "empty": "No logs"
       },
-
       "simulator": {
         "title": "Scheduler Simulator",
         "subtitle": "Dry run: enter a session context and preview the matched rule and final provider",
@@ -321,7 +336,6 @@
         "condition": "Condition",
         "no_matched_rule": "No rule matched"
       },
-
       "settings": {
         "title": "Settings",
         "subtitle": "Global scheduler settings, data export and import",
@@ -358,7 +372,6 @@
         "save": "Save settings",
         "export_file": "model-morph-config.json"
       },
-
       "assistant": {
         "title": "AI Config Assistant",
         "placeholder": "Describe your scheduling need, e.g. use a cheap model from 20:00 to 02:00 every night…",
@@ -392,9 +405,10 @@
         "empty_history": "This chat is empty. Type a config request to start.",
         "message_count": "Msgs",
         "updated_at": "Updated",
-        "no_title": "Untitled chat"
+        "no_title": "Untitled chat",
+        "created_at": "Created",
+        "last_preview": "Preview"
       },
-
       "wizard": {
         "title": "Schedule Rule Wizard",
         "step1": "Step 1 · Choose a goal type",
@@ -435,9 +449,13 @@
         "rule_name": "Rule name",
         "confirm_hint": "Please review the generated rule:",
         "success": "Rule created successfully",
-        "save_failed": "Save failed"
+        "save_failed": "Save failed",
+        "scope_title": "Scope (optional)",
+        "scope_groups": "Groups (comma-separated)",
+        "scope_users": "Users (comma-separated)",
+        "scope_sessions": "Sessions UMO (comma-separated)",
+        "scope_hint": "Empty=global; scoped rules take precedence over global rules"
       },
-
       "presets": {
         "title": "Time Rule Presets",
         "apply": "Apply preset",
@@ -446,7 +464,6 @@
         "need_param": "Please fill in required parameters",
         "empty": "No presets available"
       },
-
       "audit": {
         "title": "Audit Log",
         "time": "Time",
@@ -472,7 +489,12 @@
         "result_failed": "Failed",
         "result_preview": "Preview",
         "result_rollback": "Rollback",
-        "result_other": "—"
+        "result_other": "—",
+        "action_filter": "Action",
+        "expand": "Expand",
+        "before": "Before",
+        "after": "After",
+        "close": "Close"
       }
     }
   }

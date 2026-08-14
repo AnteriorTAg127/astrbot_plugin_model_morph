@@ -1,7 +1,9 @@
 // ==========================================================================
-// Model Morph · 生命周期视图（views/lifecycles.js）
-// 列表（编辑/复制/删除）+ 新建/编辑面板：initial_group / initial_rounds /
-// main_group / periodic_group / periodic_interval + 模板一键载入 + 启停。
+// Model Morph · 生命周期视图（views/lifecycles.js）v1.0.1
+// 列表 9 列：名称/模式/初始组/主组/周期组/优先级/限定群组/启用/操作（编辑/复制/删除）
+// 新建/编辑面板：initial_group / initial_rounds / main_group / periodic_group /
+// periodic_interval + priority / scope（限定群组）+ 模板一键载入 + 启停。
+// v1.0.1：新增 priority 与 scope，scope 全空=全局策略；限定命中策略优先于全局。
 // 全部动态文本走 textContent / el()，防 XSS；删除走 confirmDialog()。
 // ==========================================================================
 import { bridge, t, el, showToast, confirmDialog } from "../common.js";
@@ -27,6 +29,16 @@ function actionsRow(it) {
     return box;
 }
 
+// scope 摘要文本：scope 容错为对象；三键全空 → 全局；否则 "组:x 用户:y 会话:z"
+function scopeText(it) {
+    const scope = it && it.scope && typeof it.scope === "object" ? it.scope : {};
+    const groups = Array.isArray(scope.groups) ? scope.groups.length : 0;
+    const users = Array.isArray(scope.users) ? scope.users.length : 0;
+    const sessions = Array.isArray(scope.sessions) ? scope.sessions.length : 0;
+    if (groups + users + sessions === 0) return t("pages.model-morph.lifecycles.scope_global", "全局");
+    return `组:${groups} 用户:${users} 会话:${sessions}`;
+}
+
 function paintList(items) {
     const body = document.getElementById("lcListBody");
     const empty = document.getElementById("lcListEmpty");
@@ -46,6 +58,10 @@ function paintList(items) {
         row.appendChild(el("td", null, `${it.initial_group || "—"} × ${it.initial_rounds}`));
         row.appendChild(el("td", null, it.main_group || "—"));
         row.appendChild(el("td", null, `${it.periodic_group || "—"} / ${it.periodic_interval}`));
+        row.appendChild(el("td", null, String(it.priority ?? 0)));
+        const scTd = el("td");
+        scTd.appendChild(el("span", "scope-chip", scopeText(it)));
+        row.appendChild(scTd);
         const enTd = el("td");
         enTd.appendChild(stateBadge(it.enabled));
         row.appendChild(enTd);
@@ -58,7 +74,7 @@ async function load() {
     const mySeq = ++seq;
     const tbody = document.getElementById("lcListBody");
     const lr = el("tr"); const td = el("td", "loading", t("pages.model-morph.common.loading", "加载中…"));
-    td.colSpan = 7; lr.appendChild(td);
+    td.colSpan = 9; lr.appendChild(td);
     tbody.replaceChildren(lr);
     try {
         const items = await bridge.apiGet("lifecycles");
@@ -106,6 +122,7 @@ function renderEditor() {
     grid.appendChild(lbField(t("pages.model-morph.lifecycles.main_group", "主组"), grpSelect("main_group", draft.main_group)));
     grid.appendChild(lbField(t("pages.model-morph.lifecycles.periodic_group", "周期组"), grpSelect("periodic_group", draft.periodic_group)));
     grid.appendChild(lbIntField(t("pages.model-morph.lifecycles.periodic_interval", "周期间隔(轮)"), draft.periodic_interval ?? 5, (v) => { draft.periodic_interval = v; }));
+    grid.appendChild(lbIntField(t("pages.model-morph.lifecycles.priority", "优先级"), draft.priority ?? 0, (v) => { draft.priority = Number.isNaN(v) ? 0 : v; }));
     card.appendChild(grid);
 
     // ── 多阶段降级区块 ────────────────────────────────
@@ -166,6 +183,27 @@ function renderEditor() {
     card.appendChild(stagedCard);
     card.appendChild(calCard);
 
+    // ── 限定群组（scope）区块 ─────────────────────────
+    const scopeCard = el("div", "section-card");
+    scopeCard.appendChild(el("div", "section-title", t("pages.model-morph.lifecycles.scope", "限定群组")));
+    scopeCard.appendChild(el("div", "hint", t("pages.model-morph.lifecycles.scope_hint", "留空=全局策略；限定命中的策略优先于全局策略生效")));
+    const scope = draft.scope && typeof draft.scope === "object" ? draft.scope : { groups: [], users: [], sessions: [] };
+    const scopeMap = [
+        ["groups", t("pages.model-morph.lifecycles.scope_groups", "群组")],
+        ["users", t("pages.model-morph.lifecycles.scope_users", "用户")],
+        ["sessions", t("pages.model-morph.lifecycles.scope_sessions", "会话")],
+    ];
+    for (const [key, label] of scopeMap) {
+        const inp = document.createElement("input");
+        inp.type = "text"; inp.className = "input";
+        inp.value = (Array.isArray(scope[key]) ? scope[key] : []).join(",");
+        inp.addEventListener("input", () => {
+            draft.scope[key] = inp.value.split(",").map((s) => s.trim()).filter(Boolean);
+        });
+        scopeCard.appendChild(lbField(label, inp));
+    }
+    card.appendChild(scopeCard);
+
     const actions = el("div", "toolbar");
     const save = el("button", "btn btn-primary", t("pages.model-morph.lifecycles.save_lifecycle", "保存生命周期"));
     save.type = "button"; save.addEventListener("click", () => saveLifecycle());
@@ -217,6 +255,11 @@ function lbIntField(label, value, onChange) {
 }
 
 function openEditor(lc) {
+    if (!lc.scope || typeof lc.scope !== "object") lc.scope = { groups: [], users: [], sessions: [] };
+    for (const k of ["groups", "users", "sessions"]) {
+        if (!Array.isArray(lc.scope[k])) lc.scope[k] = [];
+    }
+    if (typeof lc.priority !== "number" || !Number.isFinite(lc.priority)) lc.priority = 0;
     draft = lc;
     renderEditor();
 }
@@ -261,6 +304,7 @@ async function chooseTemplate() {
         id: "", name: src.name || pick, enabled: true, initial_group: "", initial_rounds: src.initial_rounds || 2,
         main_group: "", periodic_group: "", periodic_interval: src.periodic_interval || 5,
         stages: [], final_group: "", calibration_event: "", calibration_group: "", calibration_rounds: 0,
+        scope: { groups: [], users: [], sessions: [] }, priority: 0,
     });
     showToast(t("pages.model-morph.lifecycles.template_hint", "模板提供名称与轮数，组字段载入后由你填写"), "success");
 }
@@ -322,6 +366,7 @@ function bind() {
             id: "", name: "", enabled: true, initial_group: "", initial_rounds: 2,
             main_group: "", periodic_group: "", periodic_interval: 5,
             stages: [], final_group: "", calibration_event: "", calibration_group: "", calibration_rounds: 0,
+            scope: { groups: [], users: [], sessions: [] }, priority: 0,
         });
     });
     document.getElementById("lcTemplates").addEventListener("click", chooseTemplate);

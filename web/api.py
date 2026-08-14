@@ -504,6 +504,11 @@ async def _handler_lifecycles_save(plugin):
         # v0.1.6：stages 若存在须为 list（非法条目交给 normalize_lifecycle 剔除，不逐条校验）。
         if "stages" in raw and not isinstance(raw["stages"], list):
             return error_response("stages 须为列表", status_code=400)
+        # v1.0.1：priority 须为整数；scope 若存在须为对象（条目校验交给 normalize）。
+        if "priority" in raw and not isinstance(raw["priority"], int):
+            return error_response("priority 须为整数", status_code=400)
+        if "scope" in raw and not isinstance(raw["scope"], dict):
+            return error_response("scope 须为对象", status_code=400)
 
         lid = raw.get("id")
         if isinstance(lid, str) and lid.strip() and plugin.lifecycles.get(lid):
@@ -580,6 +585,17 @@ async def _handler_sessions_list(plugin):
             if st.current_group_id:
                 g = plugin.groups.get(st.current_group_id)
                 group_name = g.get("name", "") if g else ""
+            # v1.0.1：补齐校准三字段、锁定目标具体值、最近切换时间、组游标与决策轨迹。
+            lock_group_name = ""
+            if st.lock_group_id:
+                lg = plugin.groups.get(st.lock_group_id)
+                lock_group_name = (lg.get("name", "") if lg else "") or st.lock_group_id
+            calibration_group_name = ""
+            if st.calibration_group_id:
+                cg = plugin.groups.get(st.calibration_group_id)
+                calibration_group_name = (
+                    (cg.get("name", "") if cg else "") or st.calibration_group_id
+                )
             rows.append(
                 {
                     "umo": st.umo,
@@ -596,8 +612,20 @@ async def _handler_sessions_list(plugin):
                     "last_rule_id": st.last_rule_id,
                     "lock_group_id": st.lock_group_id,
                     "lock_provider_id": st.lock_provider_id,
+                    "lock_group_name": lock_group_name,
+                    "lock_provider_model": provider_names.get(
+                        st.lock_provider_id, ""
+                    )
+                    or (st.lock_provider_id or ""),
                     "locked": bool(st.lock_group_id or st.lock_provider_id),
                     "pending_reset": st.pending_reset,
+                    "calibration_rounds_left": st.calibration_rounds_left,
+                    "calibration_group_id": st.calibration_group_id,
+                    "calibration_group_name": calibration_group_name,
+                    "calibration_reason": st.calibration_reason,
+                    "last_switch_at": st.last_switch_at,
+                    "group_cursor": copy.deepcopy(st.group_cursor),
+                    "last_trace": copy.deepcopy(st.last_trace),
                 }
             )
         return json_response(rows)
@@ -955,6 +983,7 @@ async def _handler_runtime(plugin):
                         "source_provider": r.get("source_provider"),
                         "target_provider": r.get("target_provider"),
                         "target_group": r.get("target_group"),
+                        "scope": copy.deepcopy(r.get("scope") or {}),
                         "schedule_type": sched.get("type"),
                         "schedule_start": sched.get("start"),
                         "schedule_end": sched.get("end"),

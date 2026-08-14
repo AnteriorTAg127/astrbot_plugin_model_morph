@@ -12,6 +12,11 @@ v0.1.6 扩展（多阶段降级 + 事件校准）：
 - ``should_trigger_compression``：纯函数启发式，用 LLM 输入 token 骤降判定
   上下文压缩发生（AstrBot 不暴露压缩事件，见 v0.1.6 分工文档）。
 
+v1.0.1 扩展（限定群组 + 优先级）：
+- ``scope`` / ``priority``：与 temporal 共用「限定群组」语义（见 scheduler/scope.py）。
+  三键全空 = 全局策略；``match_scoped``（限定命中）优先于 ``match_global``
+  （全局按 priority 降序），供 engine 在未绑定策略时自动选择。
+
 设计要点：
 - ``LIFECYCLE_TEMPLATES`` 仅提供四套预设的 name / initial_rounds / periodic_interval，
   组字段（initial_group/main_group/periodic_group）留空，由用户在 WebUI 上一键载入后填写。
@@ -27,6 +32,7 @@ import logging
 import uuid
 
 from .persistence import ConfigStore
+from .scope import normalize_scope, scope_is_empty, scope_match
 from .state import SessionState
 
 logger = logging.getLogger("astrbot_plugin_model_morph")
@@ -42,6 +48,7 @@ _COMPRESS_DROP_RATIO = 0.6
 
 # 生命周期预设模板（仅 name / initial_rounds / periodic_interval；
 # 组字段 initial_group/main_group/periodic_group 留空字符串，载入后再由用户填写）。
+# v1.0.1：scope 三键全空 = 全局策略，priority 0。
 LIFECYCLE_TEMPLATES: dict[str, dict] = {
     "balanced": {
         "name": "Balanced",
@@ -50,6 +57,8 @@ LIFECYCLE_TEMPLATES: dict[str, dict] = {
         "initial_group": "",
         "main_group": "",
         "periodic_group": "",
+        "scope": {"groups": [], "users": [], "sessions": []},
+        "priority": 0,
     },
     "quality": {
         "name": "Quality",
@@ -58,6 +67,8 @@ LIFECYCLE_TEMPLATES: dict[str, dict] = {
         "initial_group": "",
         "main_group": "",
         "periodic_group": "",
+        "scope": {"groups": [], "users": [], "sessions": []},
+        "priority": 0,
     },
     "cost_saving": {
         "name": "Cost Saving",
@@ -66,6 +77,8 @@ LIFECYCLE_TEMPLATES: dict[str, dict] = {
         "initial_group": "",
         "main_group": "",
         "periodic_group": "",
+        "scope": {"groups": [], "users": [], "sessions": []},
+        "priority": 0,
     },
     "new_conversation": {
         "name": "New Conversation",
@@ -74,6 +87,8 @@ LIFECYCLE_TEMPLATES: dict[str, dict] = {
         "initial_group": "",
         "main_group": "",
         "periodic_group": "",
+        "scope": {"groups": [], "users": [], "sessions": []},
+        "priority": 0,
     },
 }
 
@@ -84,7 +99,8 @@ def normalize_lifecycle(raw: dict) -> dict:
     字段：``id``（缺省生成）、``name``、``enabled``、``initial_group``、
     ``initial_rounds``、``main_group``、``periodic_group``、``periodic_interval``、
     ``stages``（多阶段降级）、``final_group``、``calibration_event``、
-    ``calibration_group``、``calibration_rounds``。
+    ``calibration_group``、``calibration_rounds``、``scope``（v1.0.1 限定群组，
+    三键全空=全局）、``priority``（v1.0.1，int，非法回 0）。
 
     Args:
         raw: 待规范化的原始字典（可由 WebUI 或模板提供）。
@@ -100,6 +116,10 @@ def normalize_lifecycle(raw: dict) -> dict:
             calibration_event,
         )
         calibration_event = ""
+    try:
+        priority = int(src.get("priority", 0))
+    except (TypeError, ValueError):
+        priority = 0
     result: dict = {
         "id": str(src.get("id") or "lc_" + uuid.uuid4().hex[:8]),
         "name": str(src.get("name") or "未命名生命周期"),
@@ -114,6 +134,9 @@ def normalize_lifecycle(raw: dict) -> dict:
         "calibration_event": calibration_event,
         "calibration_group": str(src.get("calibration_group") or ""),
         "calibration_rounds": _as_non_neg_int(src.get("calibration_rounds", 0)),
+        # v1.0.1：限定群组 + 优先级（与 temporal 共享 scope 语义）。
+        "scope": normalize_scope(src.get("scope")),
+        "priority": priority,
     }
     return result
 
@@ -200,6 +223,43 @@ class LifecycleEngine:
             for i in self._raw_list()
             if not only_enabled or i.get("enabled", True)
         ]
+
+    # ---- v1.0.1：限定群组自动选择 ----
+
+    def _ordered_enabled(self) -> list[dict]:
+        """返回启用策略，按 priority 降序（同 priority 保持存储顺序）。"""
+        items = [
+            normalize_lifecycle(i)
+            for i in self._raw_list()
+            if i.get("enabled", True)
+        ]
+        return sorted(
+            items, key=lambda i: (int(i.get("priority", 0) or 0),), reverse=True
+        )
+
+    def match_scoped(self, meta: dict | None) -> dict | None:
+        """返回限定命中（scope 非空且匹配 meta）的启用策略中 priority 最高者。
+
+        Args:
+            meta: 上下文 dict（``group_id`` / ``sender_id`` / ``umo``）。
+
+        Returns:
+            命中的生命周期深拷贝，无命中返回 None。
+        """
+        for item in self._ordered_enabled():
+            scope = item.get("scope")
+            if scope_is_empty(scope):
+                continue
+            if scope_match(scope, meta):
+                return copy.deepcopy(item)
+        return None
+
+    def match_global(self) -> dict | None:
+        """返回全局（scope 全空）启用策略中 priority 最高者，无则 None。"""
+        for item in self._ordered_enabled():
+            if scope_is_empty(item.get("scope")):
+                return copy.deepcopy(item)
+        return None
 
     def create(self, raw: dict) -> dict:
         """新建一个生命周期并持久化，返回规范化后的完整对象。"""

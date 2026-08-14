@@ -1,6 +1,9 @@
 // ==========================================================================
 // Model Morph · 时间调度规则视图（views/temporal.js）
-// 列表（名称/类型/作用组/替换/时间段/优先级/启用/操作）+ 冲突横幅 + 新建/编辑面板。
+// 列表（名称/类型/作用组/限定群组/替换/时间段/优先级/来源/启用/操作，共 10 列）
+//   + 冲突横幅 + 新建/编辑面板。
+// scope 二段式语义：scope={groups,users,sessions}，三键全空=全局规则；
+// 限定命中的规则优先于全局规则生效。
 // 数据来源：
 //   - GET  temporal          → 全部时间调度规则（plugin.temporal.list_()，按优先级降序）
 //   - POST validate (body {}) → 全量校验 + 冲突检测，返回 {ok,errors,warnings,conflicts}
@@ -93,6 +96,27 @@ function replaceText(r) {
     return (providerName(r.source_provider) || "—") + " → " + providerName(r.target_provider);
 }
 
+// 限定群组列：scope={groups,users,sessions}，三键全空=全局规则；否则「组:x 用户:y 会话:z」。
+function scopeText(r) {
+    const s = (r.scope && typeof r.scope === "object") ? r.scope : {};
+    const groups = Array.isArray(s.groups) ? s.groups : [];
+    const users = Array.isArray(s.users) ? s.users : [];
+    const sessions = Array.isArray(s.sessions) ? s.sessions : [];
+    if (!groups.length && !users.length && !sessions.length) {
+        return t(`${S}.scope_global`, "全局");
+    }
+    return "组:" + groups.length + " 用户:" + users.length + " 会话:" + sessions.length;
+}
+
+// 来源列：metadata.source → 向导 / 预设 / 手动 / 其他。
+function sourceLabel(r) {
+    const src = (r.metadata && r.metadata.source) || "";
+    if (src === "wizard") return t(`${S}.source_wizard`, "向导");
+    if (src === "preset") return t(`${S}.source_preset`, "预设");
+    if (src === "manual") return t(`${S}.source_manual`, "手动");
+    return "—";
+}
+
 // ========== 列表 ==========
 function ruleActionsRow(r) {
     const box = el("div", "cell-actions");
@@ -123,9 +147,13 @@ function paintList(rules) {
             el("span", "badge " + (r.kind === "group_switch" ? "primary" : "warning"), kindLabel(r.kind))
         );
         row.appendChild(el("td", null, r.group_id ? groupName(r.group_id) : t(`${S}.global_scope`, "全局")));
+        const scopeTd = el("td");
+        scopeTd.appendChild(el("span", "scope-chip", scopeText(r)));
+        row.appendChild(scopeTd);
         row.appendChild(el("td", null, replaceText(r)));
         row.appendChild(scheduleCell(r));
         row.appendChild(el("td", null, String(r.priority ?? 200)));
+        row.appendChild(el("td", null, sourceLabel(r)));
         const enTd = el("td");
         enTd.appendChild(stateBadge(r.enabled));
         row.appendChild(enTd);
@@ -166,7 +194,7 @@ async function load() {
     const tbody = document.getElementById("temporalListBody");
     const loadRow = el("tr");
     const loadTd = el("td", "loading", t("pages.model-morph.common.loading", "加载中…"));
-    loadTd.colSpan = 8;
+    loadTd.colSpan = 10;
     loadRow.appendChild(loadTd);
     tbody.replaceChildren(loadRow);
     try {
@@ -200,7 +228,10 @@ function freshSchedule() {
 
 function openEditor(r) {
     if (!r.schedule) r.schedule = freshSchedule();
-    if (!r.scope) r.scope = { groups: [], users: [], sessions: [] };
+    if (!r.scope || typeof r.scope !== "object") r.scope = { groups: [], users: [], sessions: [] };
+    if (!Array.isArray(r.scope.groups)) r.scope.groups = [];
+    if (!Array.isArray(r.scope.users)) r.scope.users = [];
+    if (!Array.isArray(r.scope.sessions)) r.scope.sessions = [];
     draft = r;
     renderEditor();
 }
@@ -398,6 +429,25 @@ function renderEditor() {
 
     card.appendChild(sGrid);
 
+    // 限定群组（scope：三键全空=全局规则；限定命中的规则优先于全局规则生效）
+    const scopeHead = el("div", "editor-heading", t(`${S}.scope`, "限定群组"));
+    card.appendChild(scopeHead);
+    card.appendChild(el("div", "hint", t(`${S}.scope_hint`, "留空=全局规则；限定命中的规则优先于全局规则生效")));
+    const scopeGrid = el("div", "form-grid");
+    for (const key of ["groups", "users", "sessions"]) {
+        const input = document.createElement("input");
+        input.type = "text"; input.className = "input";
+        input.value = (draft.scope[key] || []).join(",");
+        input.addEventListener("input", () => {
+            draft.scope[key] = input.value.split(",").map((x) => x.trim()).filter(Boolean);
+        });
+        const label = key === "groups" ? t(`${S}.scope_groups`, "限定群组（逗号分隔，留空=全局）")
+            : key === "users" ? t(`${S}.scope_users`, "限定用户（逗号分隔，留空=全局）")
+            : t(`${S}.scope_sessions`, "限定会话 UMO（逗号分隔，留空=全局）");
+        scopeGrid.appendChild(lb(label, input));
+    }
+    card.appendChild(scopeGrid);
+
     // 动作
     const actionsBar = el("div", "toolbar");
     const save = el("button", "btn btn-primary", draft.id ? t("pages.model-morph.common.save", "保存") : t(`${S}.save_new`, "创建规则"));
@@ -421,7 +471,11 @@ function buildPayload() {
         source_provider: kind === "model_override" ? (draft.source_provider || "") : "",
         target_provider: kind === "model_override" ? (draft.target_provider || "") : "",
         target_group: kind === "group_switch" ? (draft.target_group || "") : "",
-        scope: { groups: [], users: [], sessions: [] },
+        scope: {
+            groups: ((draft.scope && draft.scope.groups) || []).slice(),
+            users: ((draft.scope && draft.scope.users) || []).slice(),
+            sessions: ((draft.scope && draft.scope.sessions) || []).slice(),
+        },
         schedule: {
             type: draft.schedule.type || "daily",
             start: draft.schedule.type === "always" ? "" : (draft.schedule.start || ""),
