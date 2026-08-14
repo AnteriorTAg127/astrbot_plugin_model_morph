@@ -56,7 +56,8 @@
         "import_failed": "Import failed",
         "providers_failed": "Failed to load providers",
         "invalid_json": "Invalid JSON",
-        "this_plugin_rules_note": "Model Morph lets rules match specific groups/users/sessions via scope to give each group its own model."
+        "this_plugin_rules_note": "Model Morph lets rules match specific groups/users/sessions via scope to give each group its own model.",
+        "tag_add_hint": "Type and press Enter"
       },
       "dashboard": {
         "title": "Scheduler Overview",

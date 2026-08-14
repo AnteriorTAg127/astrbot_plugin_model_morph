@@ -14,9 +14,12 @@
 // 全部动态文本 textContent / el()，防 XSS。
 // ==========================================================================
 import { bridge, t, el, showToast } from "../common.js";
-import { refData, buildGroupSelect, buildProviderSelect } from "./shared.js";
+import { refData, buildGroupSelect, buildProviderSelect, buildTagInput } from "./shared.js";
 
 const S = "pages.model-morph.wizard";
+
+// 逗号串 → 去空白数组（标签式输入的 state 存逗号串，提交时展开）。
+const splitCsv = (s) => String(s || "").split(",").map((x) => x.trim()).filter(Boolean);
 
 // 目标类型定义：kind 决定 步骤3/4；schedule 默认值用于步骤5 初始化。
 const TARGETS = [
@@ -320,18 +323,15 @@ function renderStep5() {
     box.appendChild(scopeHint);
 
     const scopeFields = [
-        { key: "scopeGroups", keyTitle: "scope_groups", label: t(`${S}.scope_groups`, "限定群组（逗号分隔）") },
-        { key: "scopeUsers", keyTitle: "scope_users", label: t(`${S}.scope_users`, "限定用户（逗号分隔）") },
-        { key: "scopeSessions", keyTitle: "scope_sessions", label: t(`${S}.scope_sessions`, "限定会话（逗号分隔）") },
+        { key: "scopeGroups", label: t(`${S}.scope_groups`, "限定群组（逗号分隔）") },
+        { key: "scopeUsers", label: t(`${S}.scope_users`, "限定用户（逗号分隔）") },
+        { key: "scopeSessions", label: t(`${S}.scope_sessions`, "限定会话（逗号分隔）") },
     ];
     for (const sf of scopeFields) {
         const wrap = el("div", "form-field");
         wrap.appendChild(el("label", null, sf.label));
-        const inp = document.createElement("input");
-        inp.type = "text"; inp.className = "input";
-        inp.value = state[sf.key];
-        inp.addEventListener("input", () => { state[sf.key] = inp.value; });
-        wrap.appendChild(inp);
+        // 标签式输入：回车挂标签；state 存逗号串，提交时展开为数组。
+        wrap.appendChild(buildTagInput(splitCsv(state[sf.key]), (arr) => { state[sf.key] = arr.join(","); }));
         box.appendChild(wrap);
     }
 
@@ -353,7 +353,6 @@ function validateTime() {
 // ===== 步骤6：确认预览 =====
 function buildRule() {
     const isGroup = state.type.kind === "group_switch";
-    const splitList = (s) => String(s || "").split(",").map((x) => x.trim()).filter(Boolean);
     const rule = {
         name: state.name,
         enabled: true,
@@ -363,9 +362,9 @@ function buildRule() {
         target_provider: isGroup ? "" : state.target_provider,
         target_group: isGroup ? state.target_group : "",
         scope: {
-            groups: splitList(state.scopeGroups),
-            users: splitList(state.scopeUsers),
-            sessions: splitList(state.scopeSessions),
+            groups: splitCsv(state.scopeGroups),
+            users: splitCsv(state.scopeUsers),
+            sessions: splitCsv(state.scopeSessions),
         },
         schedule: {
             type: state.schedType,

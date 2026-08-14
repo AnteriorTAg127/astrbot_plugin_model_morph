@@ -7,7 +7,7 @@
 // 全部动态文本走 textContent / el()，防 XSS；删除走 confirmDialog()。
 // ==========================================================================
 import { bridge, t, el, showToast, confirmDialog } from "../common.js";
-import { refData, buildGroupSelect } from "./shared.js";
+import { refData, buildGroupSelect, buildTagInput } from "./shared.js";
 
 let seq = 0;
 let draft = null;
@@ -184,6 +184,7 @@ function renderEditor() {
     card.appendChild(calCard);
 
     // ── 限定群组（scope）区块 ─────────────────────────
+    // 标签式输入：上方蓝底白字标签，输入后回车添加。
     const scopeCard = el("div", "section-card");
     scopeCard.appendChild(el("div", "section-title", t("pages.model-morph.lifecycles.scope", "限定群组")));
     scopeCard.appendChild(el("div", "hint", t("pages.model-morph.lifecycles.scope_hint", "留空=全局策略；限定命中的策略优先于全局策略生效")));
@@ -194,13 +195,9 @@ function renderEditor() {
         ["sessions", t("pages.model-morph.lifecycles.scope_sessions", "会话")],
     ];
     for (const [key, label] of scopeMap) {
-        const inp = document.createElement("input");
-        inp.type = "text"; inp.className = "input";
-        inp.value = (Array.isArray(scope[key]) ? scope[key] : []).join(",");
-        inp.addEventListener("input", () => {
-            draft.scope[key] = inp.value.split(",").map((s) => s.trim()).filter(Boolean);
-        });
-        scopeCard.appendChild(lbField(label, inp));
+        scopeCard.appendChild(
+            lbField(label, buildTagInput(Array.isArray(scope[key]) ? scope[key] : [], (arr) => { draft.scope[key] = arr; }))
+        );
     }
     card.appendChild(scopeCard);
 

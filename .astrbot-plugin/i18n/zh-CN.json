@@ -56,7 +56,8 @@
         "import_failed": "导入失败",
         "providers_failed": "Provider 列表加载失败",
         "invalid_json": "JSON 解析失败",
-        "this_plugin_rules_note": "Model Morph 允许规则级 scope 或条件命中对应群/用户/会话，实现不同群不同模型。"
+        "this_plugin_rules_note": "Model Morph 允许规则级 scope 或条件命中对应群/用户/会话，实现不同群不同模型。",
+        "tag_add_hint": "输入后回车添加"
       },
       "dashboard": {
         "title": "调度器总览",

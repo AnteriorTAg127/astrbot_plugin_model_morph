@@ -18,7 +18,7 @@
 // 全部动态文本 textContent / el() 防 XSS；删除走 confirmDialog()。
 // ==========================================================================
 import { bridge, t, el, showToast, confirmDialog } from "../common.js";
-import { refData, buildProviderSelect, buildGroupSelect } from "./shared.js";
+import { refData, buildProviderSelect, buildGroupSelect, buildTagInput } from "./shared.js";
 
 const S = "pages.model-morph.temporal";
 const SCHEDULE_TYPES = ["always", "daily", "weekly", "date"];
@@ -430,21 +430,18 @@ function renderEditor() {
     card.appendChild(sGrid);
 
     // 限定群组（scope：三键全空=全局规则；限定命中的规则优先于全局规则生效）
+    // 标签式输入：上方蓝底白字标签，输入后回车添加。
     const scopeHead = el("div", "editor-heading", t(`${S}.scope`, "限定群组"));
     card.appendChild(scopeHead);
     card.appendChild(el("div", "hint", t(`${S}.scope_hint`, "留空=全局规则；限定命中的规则优先于全局规则生效")));
     const scopeGrid = el("div", "form-grid");
     for (const key of ["groups", "users", "sessions"]) {
-        const input = document.createElement("input");
-        input.type = "text"; input.className = "input";
-        input.value = (draft.scope[key] || []).join(",");
-        input.addEventListener("input", () => {
-            draft.scope[key] = input.value.split(",").map((x) => x.trim()).filter(Boolean);
-        });
         const label = key === "groups" ? t(`${S}.scope_groups`, "限定群组（逗号分隔，留空=全局）")
             : key === "users" ? t(`${S}.scope_users`, "限定用户（逗号分隔，留空=全局）")
             : t(`${S}.scope_sessions`, "限定会话 UMO（逗号分隔，留空=全局）");
-        scopeGrid.appendChild(lb(label, input));
+        scopeGrid.appendChild(
+            lb(label, buildTagInput(draft.scope[key] || [], (arr) => { draft.scope[key] = arr; }))
+        );
     }
     card.appendChild(scopeGrid);
 
