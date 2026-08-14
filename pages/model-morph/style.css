@@ -1047,15 +1047,17 @@ input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--primary)
 /* 时间规则编辑器 · 星期选择横向排布 */
 .temporal-weekdays { grid-column: 1 / -1; }
 
-.scope-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; background:#eef2f7; color:#4a5a6a; }
-.conv-preview { display:block; font-size:12px; color:#8a94a0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
+.scope-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-size:12px; background:var(--surface-2); color:var(--text-2); }
+.conv-preview { display:block; font-size:12px; color:var(--text-3); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
 
-/* 标签式输入（限定群组）：上方蓝底白字标签 + 下方无边框输入 */
-.tag-input { border:1px solid #d6dce4; border-radius:6px; padding:6px 8px; background:#fff; transition:border-color .15s, box-shadow .15s; }
-.tag-input:focus-within { border-color:#3b82f6; box-shadow:0 0 0 2px rgba(59,130,246,.15); }
+/* 标签式输入（限定群组）：上方蓝底白字标签 + 下方无边框输入。
+   外观与 .input 一致（双主题变量），禁止硬编码色值。 */
+.tag-input { border:1px solid var(--border); border-radius:var(--radius-sm); padding:4px 10px; background:var(--surface); color:var(--text); transition:var(--transition); }
+.tag-input:focus-within { border-color:var(--primary); box-shadow:0 0 0 3px rgba(22, 93, 255, 0.1); }
 .tag-chips { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px; }
 .tag-chips:empty { display:none; }
-.tag-chip { display:inline-flex; align-items:center; gap:4px; background:#3b82f6; color:#fff; font-size:12px; line-height:1.5; padding:1px 4px 1px 10px; border-radius:12px; }
+.tag-chip { display:inline-flex; align-items:center; gap:4px; background:var(--primary); color:#fff; font-size:12px; line-height:1.5; padding:1px 4px 1px 10px; border-radius:12px; }
 .tag-chip-x { border:0; background:transparent; color:#fff; font-size:13px; line-height:1; padding:0 4px; cursor:pointer; opacity:.85; }
 .tag-chip-x:hover { opacity:1; }
-.tag-input-field { width:100%; border:0; outline:0; background:transparent; font-size:13px; padding:2px 0; }
+.tag-input-field { width:100%; border:0; outline:0; background:transparent; color:var(--text); font-size:0.85rem; padding:3px 0; }
+.tag-input-field::placeholder { color:var(--text-3); }
