@@ -1,0 +1,3 @@
+# Model Morph — 模型自动调度器
+# 本插件仅依赖 AstrBot 内置能力（asyncio / json / datetime / zoneinfo / random / uuid / pathlib / logging），
+# 无任何第三方 pip 依赖。此文件留空即可，保留注释以便 AstrBot 正确识别独立插件。

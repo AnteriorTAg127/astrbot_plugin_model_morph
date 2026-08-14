@@ -205,3 +205,22 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# 开发过程文件（不提交 git）
+开发/
+开发/api_config.json
+
+# AI 辅助文档（仅本地，不入库）
+CLAUDE.md
+
+# 测试代码仅在 dev 分支提交（master 分支不提交测试代码）
+tests/
+
+# 插件运行时数据（由插件写入 AstrBot data 目录，不随插件仓库走）
+*.sqlite3
+
+# 防御：任何混入插件根目录的 data 副本一律不提交（真实数据在 AstrBot data/ 下）
+data/
+
+# 编辑器/工具链本地状态
+.reasonix/
