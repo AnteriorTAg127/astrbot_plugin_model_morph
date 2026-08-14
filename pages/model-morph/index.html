@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Model Morph</title>
+    <link rel="stylesheet" href="./style.css?v=1.0.0">
+</head>
+<body>
+    <div class="app">
+        <!-- 顶栏 -->
+        <header class="header">
+            <div class="header-left">
+                <span class="header-icon" id="headerIcon">🎛️</span>
+                <h1 data-i18n="pages.model-morph.title" id="headerTitle">Model Morph 调度器</h1>
+            </div>
+        </header>
+
+        <!-- 顶层功能分区（滑动高光分段控件）：调度编排 / 运行状态 / 工具 -->
+        <div class="scope-switch" role="tablist" aria-label="功能分区">
+            <button class="scope-btn active" data-scope="schedule" role="tab" aria-selected="true">
+                <span class="scope-ico" aria-hidden="true">🎛️</span>
+                <span class="scope-label" data-i18n="pages.model-morph.scope.schedule">调度编排</span>
+            </button>
+            <button class="scope-btn" data-scope="runtime" role="tab" aria-selected="false">
+                <span class="scope-ico" aria-hidden="true">📡</span>
+                <span class="scope-label" data-i18n="pages.model-morph.scope.runtime">运行状态</span>
+            </button>
+            <button class="scope-btn" data-scope="tools" role="tab" aria-selected="false">
+                <span class="scope-ico" aria-hidden="true">🧪</span>
+                <span class="scope-label" data-i18n="pages.model-morph.scope.tools">工具</span>
+            </button>
+            <span class="scope-glow" aria-hidden="true"></span>
+        </div>
+
+        <!-- 调度编排子 Tab -->
+        <nav class="tabs tabs-schedule">
+            <button class="tab active" data-tab="dashboard" data-i18n="pages.model-morph.nav.dashboard">总览</button>
+            <button class="tab" data-tab="groups" data-i18n="pages.model-morph.nav.groups">模型组</button>
+            <button class="tab" data-tab="rules" data-i18n="pages.model-morph.nav.rules">规则</button>
+            <button class="tab" data-tab="temporal" data-i18n="pages.model-morph.nav.temporal">时间规则</button>
+            <button class="tab" data-tab="lifecycles" data-i18n="pages.model-morph.nav.lifecycles">生命周期</button>
+        </nav>
+
+        <!-- 运行状态下 Tab -->
+        <nav class="tabs tabs-runtime hidden">
+            <button class="tab" data-tab="sessions" data-i18n="pages.model-morph.nav.sessions">会话</button>
+            <button class="tab" data-tab="logs" data-i18n="pages.model-morph.nav.logs">日志</button>
+        </nav>
+
+        <!-- 工具子 Tab -->
+        <nav class="tabs tabs-tools hidden">
+            <button class="tab" data-tab="assistant" data-i18n="pages.model-morph.nav.assistant">AI 助手</button>
+            <button class="tab" data-tab="wizard" data-i18n="pages.model-morph.nav.wizard">配置向导</button>
+            <button class="tab" data-tab="presets" data-i18n="pages.model-morph.nav.presets">预设</button>
+            <button class="tab" data-tab="audit" data-i18n="pages.model-morph.nav.audit">审计日志</button>
+            <button class="tab" data-tab="simulator" data-i18n="pages.model-morph.nav.simulator">模拟器</button>
+            <button class="tab" data-tab="settings" data-i18n="pages.model-morph.nav.settings">设置</button>
+        </nav>
+
+        <!-- ============ 总览页 ============ -->
+        <section class="page active" id="page-dashboard">
+            <div class="stats-grid" id="dashStats" aria-label="调度器状态"><div class="loading">加载中…</div></div>
+            <div class="section-card">
+                <div class="section-title"><span data-i18n="pages.model-morph.dashboard.active_temporal_title">当前生效时段规则</span></div>
+                <div id="dashTemporal"><div class="loading">加载中…</div></div>
+            </div>
+            <div class="section-card">
+                <div class="section-title"><span data-i18n="pages.model-morph.dashboard.recent_switches">最近切换</span></div>
+                <div id="dashSwitches"><div class="loading">加载中…</div></div>
+            </div>
+            <div class="section-card">
+                <div class="section-title"><span data-i18n="pages.model-morph.dashboard.recent_errors">最近错误</span></div>
+                <div id="dashErrors"><div class="loading">加载中…</div></div>
+            </div>
+            <div class="toolbar page-actions">
+                <button id="dashRefresh" class="btn btn-ghost btn-sm" data-i18n="pages.model-morph.common.refresh">↻ 刷新</button>
+            </div>
+        </section>
+
+        <!-- ============ 模型组页 ============ -->
+        <section class="page" id="page-groups">
+            <div class="section-card">
+                <div class="section-title">
+                    <span data-i18n="pages.model-morph.groups.title">👥 模型组</span>
+                    <div class="toolbar-title">
+                        <button id="groupRefresh" class="btn btn-ghost btn-sm" data-i18n="pages.model-morph.common.refresh">↻ 刷新</button>
+                        <button id="groupNew" class="btn btn-primary btn-sm" data-i18n="pages.model-morph.groups.new_group">＋ 新建模型组</button>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th data-i18n="pages.model-morph.common.name">名称</th>
+                                <th data-i18n="pages.model-morph.common.id">ID</th>
+                                <th data-i18n="pages.model-morph.groups.strategy">策略</th>
+                                <th data-i18n="pages.model-morph.groups.member_count">成员数</th>
+                                <th data-i18n="pages.model-morph.common.enabled">启用</th>
+                                <th data-i18n="pages.model-morph.common.actions">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="groupListBody"></tbody>
+                    </table>
+                    <div id="groupListEmpty" class="empty-state" style="display:none;">
+                        <span class="empty-icon">🗂️</span>
+                        <p data-i18n="pages.model-morph.common.empty">暂无模型组</p>
+                    </div>
+                </div>
+            </div>
+            <div id="groupEditor" class="editor-panel"></div>
+        </section>
+
+        <!-- ============ 规则页 ============ -->
+        <section class="page" id="page-rules">
+            <div class="section-card">
+                <div class="section-title">
+                    <span data-i18n="pages.model-morph.rules.title">⚙️ 规则引擎</span>
+                    <button id="ruleNew" class="btn btn-primary btn-sm" data-i18n="pages.model-morph.rules.new_rule">＋ 新建规则</button>
+                </div>
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th data-i18n="pages.model-morph.common.name">名称</th>
+                                <th data-i18n="pages.model-morph.rules.when">当</th>
+                                <th data-i18n="pages.model-morph.rules.then">执行</th>
+                                <th data-i18n="pages.model-morph.rules.priority">优先级</th>
+                                <th data-i18n="pages.model-morph.common.enabled">启用</th>
+                                <th data-i18n="pages.model-morph.common.actions">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ruleListBody"></tbody>
+                    </table>
+                    <div id="ruleListEmpty" class="empty-state" style="display:none;">
+                        <span class="empty-icon">📐</span>
+                        <p data-i18n="pages.model-morph.rules.no_rules">暂无规则，点击「新建规则」开始编排</p>
+                    </div>
+                </div>
+            </div>
+            <div id="ruleEditor" class="editor-panel"></div>
+        </section>
+
+        <!-- ============ 时间规则页 ============ -->
+        <section class="page" id="page-temporal">
+            <div class="section-card">
+                <div class="section-title">
+                    <span data-i18n="pages.model-morph.temporal.title">⏱️ 时间调度规则</span>
+                    <div class="toolbar-title">
+                        <button id="temporalRefresh" class="btn btn-ghost btn-sm" data-i18n="pages.model-morph.common.refresh">↻ 刷新</button>
+                        <button id="temporalNew" class="btn btn-primary btn-sm" data-i18n="pages.model-morph.temporal.new">＋ 新建时间调度规则</button>
+                    </div>
+                </div>
+                <div id="temporalConflicts" class="conflict-banner" style="display:none;"></div>
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th data-i18n="pages.model-morph.common.name">名称</th>
+                                <th data-i18n="pages.model-morph.temporal.kind">类型</th>
+                                <th data-i18n="pages.model-morph.temporal.group">作用组</th>
+                                <th data-i18n="pages.model-morph.temporal.replace">替换</th>
+                                <th data-i18n="pages.model-morph.temporal.schedule">时间段</th>
+                                <th data-i18n="pages.model-morph.temporal.priority">优先级</th>
+                                <th data-i18n="pages.model-morph.common.enabled">启用</th>
+                                <th data-i18n="pages.model-morph.common.actions">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="temporalListBody"></tbody>
+                    </table>
+                    <div id="temporalListEmpty" class="empty-state" style="display:none;">
+                        <span class="empty-icon">⏱️</span>
+                        <p data-i18n="pages.model-morph.common.empty">暂无时间调度规则</p>
+                    </div>
+                </div>
+            </div>
+            <div id="temporalEditor" class="editor-panel"></div>
+        </section>
+
+        <!-- ============ 生命周期页 ============ -->
+        <section class="page" id="page-lifecycles">
+            <div class="section-card">
+                <div class="section-title">
+                    <span data-i18n="pages.model-morph.lifecycles.title">🔄 生命周期策略</span>
+                    <div class="toolbar-title">
+                        <button id="lcTemplates" class="btn btn-ghost btn-sm" data-i18n="pages.model-morph.lifecycles.load_template">载入模板</button>
+                        <button id="lcNew" class="btn btn-primary btn-sm" data-i18n="pages.model-morph.lifecycles.new_lifecycle">＋ 新建生命周期</button>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th data-i18n="pages.model-morph.common.name">名称</th>
+                                <th data-i18n="pages.model-morph.lifecycles.initial_group">初始组</th>
+                                <th data-i18n="pages.model-morph.lifecycles.main_group">主组</th>
+                                <th data-i18n="pages.model-morph.lifecycles.periodic_group">周期组</th>
+                                <th data-i18n="pages.model-morph.common.enabled">启用</th>
+                                <th data-i18n="pages.model-morph.common.actions">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="lcListBody"></tbody>
+                    </table>
+                    <div id="lcListEmpty" class="empty-state" style="display:none;">
+                        <span class="empty-icon">🔁</span>
+                        <p data-i18n="pages.model-morph.common.empty">暂无生命周期策略</p>
+                    </div>
+                </div>
+            </div>
+            <div id="lcEditor" class="editor-panel"></div>
+        </section>
+
+        <!-- ============ 会话页 ============ -->
+        <section class="page" id="page-sessions">
+            <div class="section-card">
+                <div class="query-filters sess-filters">
+                    <div class="filter-group sess-search">
+                        <label data-i18n="pages.model-morph.common.search">搜索</label>
+                        <input type="text" id="sessSearch" class="input" data-i18n-ph="pages.model-morph.sessions.search_placeholder" placeholder="搜索 UMO / 群 / Provider…">
+                    </div>
+                    <div class="filter-group filter-action">
+                        <button id="sessRefresh" class="btn btn-ghost btn-sm" data-i18n="pages.model-morph.common.refresh">↻ 刷新</button>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th data-i18n="pages.model-morph.sessions.umo">会话</th>
+                                <th data-i18n="pages.model-morph.sessions.provider">Provider</th>
+                                <th data-i18n="pages.model-morph.sessions.group">模型组</th>
+                                <th data-i18n="pages.model-morph.sessions.round">轮数</th>
+                                <th data-i18n="pages.model-morph.sessions.stage">阶段</th>
+                                <th data-i18n="pages.model-morph.sessions.lifecycle">生命周期</th>
+                                <th data-i18n="pages.model-morph.sessions.rule">命中规则</th>
+                                <th data-i18n="pages.model-morph.sessions.locked">锁定</th>
+                                <th data-i18n="pages.model-morph.common.actions">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sessListBody"></tbody>
+                    </table>
+                    <div id="sessListEmpty" class="empty-state" style="display:none;">
+                        <span class="empty-icon">📡</span>
+                        <p data-i18n="pages.model-morph.sessions.no_sessions">暂无活跃会话</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ 日志页 ============ -->
+        <section class="page" id="page-logs">
+            <div class="section-card">
+                <div class="section-title">
+                    <span data-i18n="pages.model-morph.logs.title">📋 调度日志</span>
+                    <div class="toolbar-title">
+                        <button id="logsRefresh" class="btn btn-ghost btn-sm" data-i18n="pages.model-morph.common.refresh">↻ 刷新</button>
+                        <button id="logsClear" class="btn btn-danger btn-sm" data-i18n="pages.model-morph.logs.clear">清空日志</button>
+                    </div>
+                </div>
+                <div class="query-filters logs-filters">
+                    <div class="filter-group">
+                        <label data-i18n="pages.model-morph.logs.filter_umo">按会话过滤</label>
+                        <input type="text" id="logsUmo" class="input" data-i18n-ph="pages.model-morph.logs.filter_umo_ph" placeholder="UMO，留空全部">
+                    </div>
+                    <div class="filter-group">
+                        <label data-i18n="pages.model-morph.logs.filter_level">按级别过滤</label>
+                        <select id="logsLevel" class="input input-select">
+                            <option value="" data-i18n="pages.model-morph.logs.level_all">全部</option>
+                            <option value="error" data-i18n="pages.model-morph.logs.level_error">仅错误</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th data-i18n="pages.model-morph.logs.time">时间</th>
+                                <th data-i18n="pages.model-morph.logs.umo">会话</th>
+                                <th data-i18n="pages.model-morph.logs.type">类型</th>
+                                <th data-i18n="pages.model-morph.logs.rule">规则</th>
+                                <th data-i18n="pages.model-morph.logs.old_model">旧 → 新模型</th>
+                                <th data-i18n="pages.model-morph.logs.round">轮数</th>
+                                <th data-i18n="pages.model-morph.logs.reason">原因</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logsBody"></tbody>
+                    </table>
+                    <div id="logsEmpty" class="empty-state" style="display:none;">
+                        <span class="empty-icon">📭</span>
+                        <p data-i18n="pages.model-morph.logs.empty">暂无日志</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ AI 助手页 ============ -->
+        <section class="page" id="page-assistant">
+            <div class="section-card">
+                <div class="section-title">
+                    <span data-i18n="pages.model-morph.assistant.title">🤖 AI 配置助手</span>
+                    <span class="assistant-tz" id="assistantTz"></span>
+                </div>
+                <div class="assistant-layout">
+                    <aside class="assistant-sidebar" id="assistantSidebar">
+                        <div class="assistant-sidebar-head">
+                            <button id="assistantNewConv" class="btn btn-primary btn-sm" data-i18n="pages.model-morph.assistant.new_conversation">＋ 新对话</button>
+                        </div>
+                        <div id="assistantConvList" class="assistant-conv-list"></div>
+                    </aside>
+                    <div class="assistant-main">
+                        <div class="chat-body" id="assistantBody"><div class="loading">加载中…</div></div>
+                        <div class="chat-chip-bar" id="assistantChips"></div>
+                        <div class="chat-input-bar">
+                            <textarea id="assistantInput" class="input chat-input-box" data-i18n-ph="pages.model-morph.assistant.placeholder" placeholder="描述你的调度需求，例如：每天晚上八点到凌晨两点用便宜模型…"></textarea>
+                            <button id="assistantSend" class="btn btn-primary" data-i18n="pages.model-morph.assistant.send">发送</button>
+                        </div>
+                        <div class="chat-pending-area" id="assistantPending"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ 配置向导页 ============ -->
+        <section class="page" id="page-wizard">
+            <div class="section-card">
+                <div class="section-title"><span data-i18n="pages.model-morph.wizard.title">🪄 调度规则配置向导</span></div>
+                <div id="wizardRoot"></div>
+            </div>
+        </section>
+
+        <!-- ============ 预设页 ============ -->
+        <section class="page" id="page-presets">
+            <div class="section-card">
+                <div class="section-title"><span data-i18n="pages.model-morph.presets.title">📦 时间规则预设</span></div>
+                <div id="presetsGrid"><div class="loading">加载中…</div></div>
+            </div>
+        </section>
+
+        <!-- ============ 审计日志页 ============ -->
+        <section class="page" id="page-audit">
+            <div class="section-card">
+                <div class="section-title">
+                    <span data-i18n="pages.model-morph.audit.title">📜 审计日志</span>
+                    <div class="toolbar-title">
+                        <button id="auditRefresh" class="btn btn-ghost btn-sm" data-i18n="pages.model-morph.audit.refresh">↻ 刷新</button>
+                        <button id="auditClear" class="btn btn-danger btn-sm" data-i18n="pages.model-morph.audit.clear">清空审计</button>
+                    </div>
+                </div>
+                <div class="query-filters audit-filters">
+                    <div class="filter-group">
+                        <label data-i18n="pages.model-morph.audit.source">来源</label>
+                        <select id="auditSource" class="input input-select">
+                            <option value="" data-i18n="pages.model-morph.audit.filter_all">全部</option>
+                            <option value="web_agent" data-i18n="pages.model-morph.audit.src_web_agent">Web 助手</option>
+                            <option value="subagent" data-i18n="pages.model-morph.audit.src_subagent">SubAgent</option>
+                            <option value="wizard" data-i18n="pages.model-morph.audit.src_wizard">配置向导</option>
+                            <option value="preset" data-i18n="pages.model-morph.audit.src_preset">预设</option>
+                            <option value="manual" data-i18n="pages.model-morph.audit.src_manual">手动</option>
+                            <option value="system" data-i18n="pages.model-morph.audit.src_system">系统</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th data-i18n="pages.model-morph.audit.time">时间</th>
+                                <th data-i18n="pages.model-morph.audit.operator">操作者</th>
+                                <th data-i18n="pages.model-morph.audit.source">来源</th>
+                                <th data-i18n="pages.model-morph.audit.action">动作</th>
+                                <th data-i18n="pages.model-morph.audit.target">目标</th>
+                                <th data-i18n="pages.model-morph.audit.result">结果</th>
+                                <th data-i18n="pages.model-morph.audit.detail">详情</th>
+                            </tr>
+                        </thead>
+                        <tbody id="auditBody"></tbody>
+                    </table>
+                    <div id="auditEmpty" class="empty-state" style="display:none;">
+                        <span class="empty-icon">📭</span>
+                        <p data-i18n="pages.model-morph.audit.empty">暂无审计记录</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ 模拟器页 ============ -->
+        <section class="page" id="page-simulator">
+            <div class="section-card">
+                <div class="section-title"><span data-i18n="pages.model-morph.simulator.title">🧪 调度模拟器</span></div>
+                <div class="form-grid">
+                    <div class="form-field">
+                        <label data-i18n="pages.model-morph.simulator.time">时间</label>
+                        <input type="datetime-local" id="simTime" class="input">
+                    </div>
+                    <div class="form-field">
+                        <label data-i18n="pages.model-morph.simulator.group">群</label>
+                        <input type="text" id="simGroup" class="input">
+                    </div>
+                    <div class="form-field">
+                        <label data-i18n="pages.model-morph.simulator.user">用户</label>
+                        <input type="text" id="simUser" class="input">
+                    </div>
+                    <div class="form-field">
+                        <label data-i18n="pages.model-morph.simulator.umo">会话 (UMO)</label>
+                        <input type="text" id="simUmo" class="input">
+                    </div>
+                    <div class="form-field">
+                        <label data-i18n="pages.model-morph.simulator.round">轮数</label>
+                        <input type="number" id="simRound" value="0" class="input">
+                    </div>
+                    <div class="form-field">
+                        <label data-i18n="pages.model-morph.simulator.event">生命周期事件</label>
+                        <select id="simEvent" class="input input-select">
+                            <option value="" data-i18n="pages.model-morph.simulator.event_none">无事件</option>
+                            <option value="new" data-i18n="pages.model-morph.simulator.event_new">新会话 (new)</option>
+                            <option value="reset" data-i18n="pages.model-morph.simulator.event_reset">重置 (reset)</option>
+                        </select>
+                    </div>
+                    <div class="form-field">
+                        <label data-i18n="pages.model-morph.simulator.message_type">消息类型</label>
+                        <select id="simMtype" class="input input-select">
+                            <option value="group" data-i18n="pages.model-morph.simulator.type_group">群消息</option>
+                            <option value="private" data-i18n="pages.model-morph.simulator.type_private">私聊消息</option>
+                        </select>
+                    </div>
+                    <div class="form-field">
+                        <label data-i18n="pages.model-morph.simulator.at_bot">@机器人</label>
+                        <label class="all-mode-switch sim-atbot">
+                            <input type="checkbox" id="simAtbot">
+                            <span class="switch-track"><span class="switch-thumb"></span></span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-field sim-message-field">
+                    <label data-i18n="pages.model-morph.simulator.message">消息文本</label>
+                    <textarea id="simMessage" class="input sim-message-box"></textarea>
+                </div>
+                <div class="toolbar">
+                    <button id="simRun" class="btn btn-primary" data-i18n="pages.model-morph.simulator.run">▶ 模拟运行</button>
+                </div>
+            </div>
+            <div id="simResult" class="sim-result"></div>
+        </section>
+
+        <!-- ============ 设置页 ============ -->
+        <section class="page" id="page-settings">
+            <div class="section-card">
+                <div class="section-title"><span data-i18n="pages.model-morph.settings.title">⚙️ 调度器设置</span></div>
+                <div class="settings-form" id="settingsForm"><div class="loading">加载中…</div></div>
+                <div class="setting-actions">
+                    <button id="settingsSave" class="btn btn-primary" data-i18n="pages.model-morph.settings.save">保存设置</button>
+                </div>
+            </div>
+            <div class="section-card">
+                <div class="section-title"><span>📦 <span data-i18n="pages.model-morph.settings.export_import">导出 / 导入</span></span></div>
+                <div class="toolbar export-bar">
+                    <button id="settingsExport" class="btn btn-ghost" data-i18n="pages.model-morph.settings.export">导出配置</button>
+                    <label class="btn btn-ghost">
+                        <span data-i18n="pages.model-morph.settings.import">导入配置</span>
+                        <input type="file" id="settingsImportFile" accept="application/json,.json" hidden>
+                    </label>
+                </div>
+                <div class="setting-desc export-hint" data-i18n="pages.model-morph.settings.import_hint">选择之前导出的 JSON 配置文件（含完整配置）</div>
+            </div>
+        </section>
+    </div>
+
+    <!-- 通用二次确认弹窗（iframe sandbox 无 allow-modals，原生 confirm 静默返回 false，故用模态框替代） -->
+    <div class="modal-mask" id="confirmModal" style="display:none;">
+        <div class="modal-card confirm-modal">
+            <div class="modal-title" id="confirmModalTitle">⚠️ 确认操作</div>
+            <div class="modal-desc" id="confirmModalMessage"></div>
+            <div class="modal-actions">
+                <button id="confirmCancelBtn" class="btn btn-ghost">取消</button>
+                <button id="confirmOkBtn" class="btn btn-danger">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast"></div>
+
+    <script type="module" src="./app.js?v=1.0.0"></script>
+</body>
+</html>

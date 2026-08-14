@@ -1,0 +1,14 @@
+{
+  "enabled": {
+    "description": "总开关",
+    "hint": "关闭时插件完全不干预模型调度（保持 AstrBot 原生行为）。详细配置请打开插件 Page（Dashboard）进行设置。",
+    "type": "bool",
+    "default": true
+  },
+  "debug": {
+    "description": "调试模式",
+    "hint": "开启后输出详细的调度决策轨迹与规则评估日志，用于排查调度问题。",
+    "type": "bool",
+    "default": false
+  }
+}
