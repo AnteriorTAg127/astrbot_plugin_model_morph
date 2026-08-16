@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.2] - 2026-08
+
+### Added
+
+- **💬 AI 助手 SSE 流式输出**：新增 `GET agent/chat/stream` 流式端点（SSE），AI 配置助手的回复逐段增量渲染（含「正在使用工具 xxx…」提示），不再一次性等待完整回复；文本超长（>2000 字符）或流式不可用时自动回退原有非流式 POST，会话持久化语义与 POST 流程完全一致（用户消息先写、完整回复后写，错误不写半截）。
+- **📝 内置 Markdown 渲染**：AI 助手气泡（历史消息与流式回复）支持 Markdown 渲染（标题/粗体/斜体/行内代码/围栏代码块/列表/引用/链接/表格/水平线）；渲染器内置实现、无外部 CDN，全程白名单标签 + textContent 写入防 XSS（`javascript:` 链接降级、脚本不执行）；用户消息保持纯文本。
+- **🔤 UMO 理解补全**：新增纯逻辑模块 `scheduler/umo.py`（UMO 官方格式 `platform_id:message_type:session_id` 的解析/构造/群号·QQ 换算），配置 Agent 系统提示词新增「会话与 UMO」章节——完整 UMO 原样使用、群号/QQ 按平台换算为 `GroupMessage`/`FriendMessage`。
+- **🧭 规则 vs 生命周期消歧**：配置 Agent 提示词新增「需求分类」准则——时间调度规则（时段/星期路由）走 `create_schedule_rule`、生命周期（轮数降级/校准）走 `create_lifecycle`、when/then 条件规则如实说明用 WebUI 规则页；含糊词（如「调度」）先查询再确认，一句话只触发一次写流程、禁止重复 create，防止多余工具调用。
+- **👁️ 前端 UMO 实时预览**：temporal / 生命周期 / 配置向导的「限定群组」输入区与模拟器的群/用户输入框下方实时显示 UMO 换算预览（平台下拉取已注册平台实例，默认优先 aiocqhttp）：群号 → `platform:GroupMessage:群号`、QQ → `platform:FriendMessage:QQ`、会话原样显示；新增 `GET platforms` 接口。
+- **🔧 LLM 工具提示词完善**：全部工具描述重写为「用途 + 关键参数 + 取值枚举」——strategy 五枚举语义、kind 二枚举、schedule 四类型与字段约束（HH:MM/跨午夜/weekdays 0-6/YYYY-MM-DD）、scope 结构（groups/users/sessions + UMO）、生命周期 stages/final_group/periodic/calibration 字段、preview ops 枚举、查询工具返回值字段含义。
+- 测试：新增 `tests/test_umo.py`（33 条，含 G1-G3 行为锁定）与 `tests/test_agent_prompt.py`（9 条提示词断言），全量 **386 个离线用例通过**，ruff 全绿；SSE 流式、Markdown 渲染、UMO 预览与消歧对话列入手动验证清单（见 README）。
+
 ## [1.0.0] - 2026-06 — 首个正式版本
 
 > 说明：本次 1.0.0 为**首个正式发布版本**（此前历史误标的 1.0.0/1.0.1/1.0.2 实为 0.1.2/0.1.3/0.1.4 的错标，见下文「版本号勘误说明」）。0.1.5 ~ 0.1.10 为开发迭代序列，本版将其全部能力冻结为正式版。

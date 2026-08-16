@@ -170,4 +170,69 @@ function buildTagInput(initialValues, onChange) {
     return box;
 }
 
-export { refData, refreshRefData, refreshGroupRefs, buildProviderSelect, buildGroupSelect, buildLifecycleSelect, buildTagInput };
+// ==========================================================================
+// UMO 实时预览工具（模块 F2）
+// 在群号 / QQ / 会话输入下方实时换算 UMO 格式：`platform:GroupMessage:群号`、
+// `platform:FriendMessage:QQ`、会话 UMO 原样输出。平台列表来自 GET platforms，
+// 失败降级为空（预览回退 aiocqhttp）。全部动态文本走 textContent 防 XSS。
+// ==========================================================================
+
+// 平台列表缓存（模块级）：首次拉取后缓存，避免每次渲染都请求。
+let platformsCache = [];
+let platformsLoaded = false;
+
+// 拉取已注册平台实例列表 [{id,name}]；失败返回 []（降级，不抛）。
+async function fetchPlatforms() {
+    if (platformsLoaded) return platformsCache;
+    try {
+        const pl = await bridge.apiGet("platforms");
+        platformsCache = (Array.isArray(pl) ? pl : []).map((p) => ({ id: p.id, name: p.name || p.id }));
+    } catch (e) {
+        platformsCache = [];
+    }
+    platformsLoaded = true;
+    return platformsCache;
+}
+
+// 填充平台下拉（UMO 预览用）。返回当前选中平台 id：
+// 有平台实例则优先选中 `aiocqhttp`，否则第一个；无平台实例时回退 aiocqhttp 并禁用。
+async function initUmoPlatformSelect(selectEl) {
+    const plats = await fetchPlatforms();
+    selectEl.replaceChildren();
+    const list = plats.length ? plats : [{ id: "aiocqhttp", name: "aiocqhttp" }];
+    for (const p of list) {
+        const opt = el("option", null, p.name || p.id);
+        opt.value = p.id;
+        selectEl.appendChild(opt);
+    }
+    if (selectEl.querySelector('option[value="aiocqhttp"]')) selectEl.value = "aiocqhttp";
+    selectEl.disabled = !plats.length;
+    return selectEl.value || "aiocqhttp";
+}
+
+// 纯函数：按 群号 / QQ / 会话三输入组合生成 UMO 预览文本（换行分隔多行）。
+// - groupId 非空   → `${platformId}:GroupMessage:${groupId}`
+// - userId 非空    → `${platformId}:FriendMessage:${userId}`
+// - sessionId 非空 → 原样输出该行
+// - 全部为空       → 返回 ""（由调用方用 emptyHint 兜底）
+function umoPreviewText(platformId, groupId, userId, sessionId) {
+    const pid = platformId || "aiocqhttp";
+    const lines = [];
+    const g = String(groupId || "").trim();
+    const u = String(userId || "").trim();
+    const s = String(sessionId || "").trim();
+    if (g) lines.push(`${pid}:GroupMessage:${g}`);
+    if (u) lines.push(`${pid}:FriendMessage:${u}`);
+    if (s) lines.push(s);
+    return lines.join("\n");
+}
+
+// 把 UMO 预览写入 container（textContent 写入防 XSS）。
+// opts: {platformId, groupId, userId, sessionId, emptyHint}
+function renderUmoPreview(container, opts = {}) {
+    const { platformId, groupId, userId, sessionId, emptyHint } = opts;
+    const text = umoPreviewText(platformId, groupId, userId, sessionId);
+    container.textContent = text || String(emptyHint || "");
+}
+
+export { refData, refreshRefData, refreshGroupRefs, buildProviderSelect, buildGroupSelect, buildLifecycleSelect, buildTagInput, fetchPlatforms, initUmoPlatformSelect, umoPreviewText, renderUmoPreview };

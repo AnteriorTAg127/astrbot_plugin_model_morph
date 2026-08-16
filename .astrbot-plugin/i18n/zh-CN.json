@@ -217,6 +217,10 @@
         "scope_sessions": "限定会话 UMO（逗号分隔，留空=全局）",
         "scope_hint": "留空=全局规则；限定命中的规则优先于全局规则生效",
         "scope_global": "全局",
+        "umo_platform": "平台",
+        "umo_preview": "UMO 预览",
+        "umo_preview_hint": "输入群号/QQ 后显示 UMO 预览",
+        "umo_session_hint": "会话 UMO 将原样使用",
         "source_wizard": "向导",
         "source_preset": "预设",
         "source_manual": "手动"
@@ -255,7 +259,11 @@
         "scope_users": "限定用户（逗号分隔，留空=全局）",
         "scope_sessions": "限定会话 UMO（逗号分隔，留空=全局）",
         "scope_hint": "留空=全局策略；限定命中的策略优先于全局策略生效",
-        "scope_global": "全局"
+        "scope_global": "全局",
+        "umo_platform": "平台",
+        "umo_preview": "UMO 预览",
+        "umo_preview_hint": "输入群号/QQ 后显示 UMO 预览",
+        "umo_session_hint": "会话 UMO 将原样使用"
       },
       "sessions": {
         "title": "活跃会话",
@@ -335,7 +343,11 @@
         "elapsed_ms": "耗时",
         "skipped": "跳过调度",
         "condition": "条件",
-        "no_matched_rule": "未命中任何规则"
+        "no_matched_rule": "未命中任何规则",
+        "umo_platform": "平台",
+        "umo_preview": "UMO 预览",
+        "umo_preview_hint": "输入群号/QQ 后显示 UMO 预览",
+        "umo_session_hint": "会话 UMO 将原样使用"
       },
       "settings": {
         "title": "设置",
@@ -378,6 +390,10 @@
         "placeholder": "描述你的调度需求，例如：每天晚上八点到凌晨两点用便宜模型…",
         "send": "发送",
         "thinking": "正在思考…",
+        "tool_using": "正在使用工具",
+        "stream_error": "连接中断，请重试",
+        "fallback_post": "已切换为普通模式",
+        "send_fail": "发送失败，请重试",
         "timezone_label": "当前调度时区",
         "welcome": "你好，我是模型调度配置助手。直接用中文告诉我你想怎么调，例如下方示例需求。",
         "apply": "应用修改",
@@ -455,7 +471,11 @@
         "scope_groups": "限定群组（逗号分隔）",
         "scope_users": "限定用户（逗号分隔）",
         "scope_sessions": "限定会话 UMO（逗号分隔）",
-        "scope_hint": "留空=全局规则；限定命中的规则优先于全局规则生效"
+        "scope_hint": "留空=全局规则；限定命中的规则优先于全局规则生效",
+        "umo_platform": "平台",
+        "umo_preview": "UMO 预览",
+        "umo_preview_hint": "输入群号/QQ 后显示 UMO 预览",
+        "umo_session_hint": "会话 UMO 将原样使用"
       },
       "presets": {
         "title": "时间规则预设",

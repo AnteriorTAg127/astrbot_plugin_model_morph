@@ -12,6 +12,7 @@
 // 全部动态文本一律 textContent / el()，防 XSS；请求中禁用发送按钮。
 // ==========================================================================
 import { bridge, t, el, showToast, confirmDialog } from "../common.js";
+import { renderMarkdown } from "../markdown.js";
 
 const S = "pages.model-morph.assistant";
 
@@ -39,11 +40,20 @@ function formatTime(iso) {
 }
 
 // ========== 文本 bubble（防 XSS） ==========
-function bubble(role, text) {
+// role = "user" | "assistant"；opts.markdown=true 时 assistant 消息走内置 Markdown 渲染。
+// - user 气泡：保持现状（pre-wrap + textContent 纯文本）；
+// - assistant 气泡：输出器渲染 markdown（白名单 + textContent），样式类追加 chat-msg-md。
+function bubble(role, text, opts = {}) {
     const row = el("div", `chat-row ${role === "user" ? "chat-row-user" : "chat-row-assistant"}`);
     const msg = el("div", `chat-msg ${role === "user" ? "chat-msg-user" : "chat-msg-assistant"}`);
-    msg.style.whiteSpace = "pre-wrap";
-    msg.textContent = text;
+    if (role === "user") {
+        msg.style.whiteSpace = "pre-wrap";
+        msg.textContent = text;
+    } else {
+        msg.classList.add("chat-msg-md");
+        // renderMarkdown 返回受控 DOM（textContent + 白名单标签），直接追加。
+        msg.appendChild(renderMarkdown(text));
+    }
     row.appendChild(msg);
     return row;
 }
@@ -173,7 +183,8 @@ function renderMessages(msgs) {
     }
     for (const m of list) {
         const role = m && m.role === "user" ? "user" : "assistant";
-        body.appendChild(bubble(role, (m && m.content) || ""));
+        // 历史消息：assistant 一律走 Markdown 渲染；user 保持纯文本。
+        body.appendChild(bubble(role, (m && m.content) || "", { markdown: role !== "user" }));
     }
     body.scrollTop = body.scrollHeight;
 }
@@ -308,6 +319,65 @@ function newConversation() {
     renderSidebar();
 }
 
+// ========== 流式渲染辅助（rAF 节流 + replaceChildren 增量重渲染） ==========
+// 维护累计文本，用 requestAnimationFrame 把累积文本全量渲染进 assistant 气泡容器，
+// 避免每个 delta 帧都做一次完整 DOM 重建而卡顿。
+const streamThrottle = {
+    container: null,      // assistant 气泡的 .chat-msg-md 容器（当前流）
+    pendingText: "",      // 未刷新的累积文本
+    textCurrent: "",      // 已渲染文本（用于判断是否有新内容）
+    rafId: 0,             // rAF 句柄，>0 表示已排入一帧
+};
+
+function scheduleStreamRender() {
+    if (streamThrottle.rafId) return; // 已有排定的一帧
+    streamThrottle.rafId = requestAnimationFrame(() => {
+        streamThrottle.rafId = 0;
+        const c = streamThrottle.container;
+        if (!c) return;
+        // 只有当累积文本与已渲染文本不同才重渲染（全量替换最简、最稳）
+        const text = streamThrottle.pendingText;
+        if (text !== streamThrottle.textCurrent) {
+            c.replaceChildren(renderMarkdown(text));
+            streamThrottle.textCurrent = text;
+            // 自动滚底（父容器 .chat-body 滚动到最下）
+            const body = document.getElementById("assistantBody");
+            if (body) body.scrollTop = body.scrollHeight;
+        }
+    });
+}
+
+// 把累计文本渲染进指定容器（供 done/finish 最终一致性渲染）。
+function appendStreamBubble(container, text) {
+    // container 是 assistant 气泡的 message 节点（.chat-msg）
+    if (!container) return;
+    const md = container.querySelector(".chat-msg-md");
+    if (md) {
+        md.replaceChildren(renderMarkdown(text));
+    } else {
+        // 兼容无 md 容器的气泡
+        container.replaceChildren(renderMarkdown(text));
+    }
+}
+
+// 清空流式节流状态（结束或错误时调用）。
+function resetStreamThrottle() {
+    if (streamThrottle.rafId) {
+        cancelAnimationFrame(streamThrottle.rafId);
+        streamThrottle.rafId = 0;
+    }
+    streamThrottle.container = null;
+    streamThrottle.pendingText = "";
+    streamThrottle.textCurrent = "";
+}
+
+// 挂载一个新的流式 assistant 气泡容器。
+function startStreamBubble(container) {
+    resetStreamThrottle();
+    streamThrottle.container = container;
+    streamThrottle.pendingText = "";
+}
+
 // ========== 发送 ==========
 async function send() {
     const input = document.getElementById("assistantInput");
@@ -329,21 +399,37 @@ async function send() {
     busy = true;
     document.getElementById("assistantSend").disabled = true;
 
+    // 流式判定：仅当文本不长且后端支持流式时才走 SSE；否则回退非流式 POST。
+    const streaming = text.length <= 2000;
+    if (!streaming) {
+        await postNonStreaming(body, text);
+        busy = false;
+        document.getElementById("assistantSend").disabled = false;
+        body.scrollTop = body.scrollHeight;
+        return;
+    }
+    await postStreaming(body, text);
+    busy = false;
+    document.getElementById("assistantSend").disabled = false;
+    body.scrollTop = body.scrollHeight;
+}
+
+// ========== 非流式 POST 路径（保留原实现，长文/不可用流式时兜底） ==========
+async function postNonStreaming(body, text) {
+    const payload = currentCid
+        ? { conversation_id: currentCid, content: text }
+        : { content: text };
     const thinking = el("div", "chat-row chat-row-assistant");
     thinking.appendChild(el("div", "chat-msg chat-msg-assistant thinking", t(`${S}.thinking`, "正在思考…")));
     body.appendChild(thinking);
     body.scrollTop = body.scrollHeight;
-
-    const payload = currentCid
-        ? { conversation_id: currentCid, content: text }
-        : { content: text };
 
     try {
         const res = await bridge.apiPost("agent/chat", payload);
         thinking.remove();
         if (res && typeof res === "object" && res.error) {
             const errText = res.error || t(`${S}.error`, "请求失败");
-            body.appendChild(bubble("assistant", errText));
+            body.appendChild(bubble("assistant", errText, { markdown: true }));
             showToast(errText, "error");
         } else {
             // 以返回值 messages 为准渲染（服务端已写回 user + assistant 消息）
@@ -353,7 +439,7 @@ async function send() {
                 renderMessages(res.messages);
             } else {
                 // 兼容：无 messages 时手动补充分支
-                body.appendChild(bubble("assistant", reply));
+                body.appendChild(bubble("assistant", reply, { markdown: true }));
             }
             // pending：非空才渲染预览卡
             if (res && res.pending && pendingOpsList(res.pending).length > 0) {
@@ -369,13 +455,157 @@ async function send() {
     } catch (e) {
         thinking.remove();
         const errText = (e && e.message) || t(`${S}.error`, "请求失败");
-        body.appendChild(bubble("assistant", errText));
+        body.appendChild(bubble("assistant", errText, { markdown: true }));
         showToast(errText, "error");
         body.scrollTop = body.scrollHeight;
-    } finally {
-        busy = false;
-        document.getElementById("assistantSend").disabled = false;
+    }
+}
+
+// ========== SSE 流式路径（agent/chat/stream） ==========
+// 帧分发：meta（会话元信息）→ delta（文本增量）→ tool（工具提示）→ done/finish（收尾）→ error。
+// 状态机要点（v1.0.2 修复）：
+// - 订阅后**等待流结束**（done/finish/error/断连）才返回，期间 busy 保持、输入框禁用，
+//   杜绝并发对话复用模块级 streamThrottle 单例导致的「跨轮文本串扰」；
+// - finish 帧放行（即使 done 已置 streamDone），保证 pending 预览卡不丢失；
+// - 最终渲染优先使用流式累积文本（覆盖模型在工具调用前输出的解释文本），
+//   与后端 done.reply（累积正文）保持一致。
+async function postStreaming(body, text) {
+    // 1) 创建 assistant 气泡 + 「正在思考…」占位
+    const payload = currentCid
+        ? { content: text, conversation_id: currentCid }
+        : { content: text };
+
+    const row = el("div", "chat-row chat-row-assistant");
+    const msg = el("div", "chat-msg chat-msg-assistant chat-msg-md");
+    const thinking = el("div", "thinking", t(`${S}.thinking`, "正在思考…"));
+    msg.appendChild(thinking);
+    row.appendChild(msg);
+    body.appendChild(row);
+    body.scrollTop = body.scrollHeight;
+
+    // 已累积的流式文本；tool 提示单独一个 span（不影响正文容器）
+    let accText = "";
+    let streamDone = false;      // 防止结束后重复处理
+    let toolHintEl = null;
+    // 流结束信号：done / finish / error / 断连 时 resolve，postStreaming 等待它，
+    // 保证一轮流式对话期间 busy 保持（防止并发复用 streamThrottle 单例）。
+    let settleStream;
+    const streamFinished = new Promise((resolve) => { settleStream = resolve; });
+
+    // 无条件绑定当前气泡（重置上一轮可能残留的节流容器）。
+    startStreamBubble(msg);
+
+    const endStream = () => {
+        resetStreamThrottle();
+        streamDone = true;
+        // 清理 tool 提示
+        if (toolHintEl) { toolHintEl.remove(); toolHintEl = null; }
         body.scrollTop = body.scrollHeight;
+        settleStream();
+    };
+
+    const showToolHint = (name) => {
+        const label = t(`${S}.tool_using`, "正在使用工具 …");
+        if (toolHintEl) toolHintEl.remove();
+        // tool_using 模板：中文「正在使用工具 xxx…」；支持 i18n 键带占位
+        toolHintEl = el("span", "chat-tool-hint", label + " " + (name || ""));
+        msg.appendChild(toolHintEl);
+        body.scrollTop = body.scrollHeight;
+    };
+
+    const clearThinking = () => {
+        thinking.remove();
+    };
+
+    const handleDelta = (d) => {
+        if (streamDone) return;
+        const piece = (d && typeof d.text === "string") ? d.text : "";
+        if (!piece) return;
+        accText += piece;
+        clearThinking();
+        // 确保节流容器始终指向当前气泡（防御跨轮残留）。
+        if (streamThrottle.container !== msg) startStreamBubble(msg);
+        streamThrottle.pendingText = accText;
+        scheduleStreamRender();
+    };
+
+    // 收尾：最终一致性渲染（不动 pending，pending 由 onMessage 的 done/finish 分支管理）。
+    const handleEnd = async (data) => {
+        endStream();
+        clearThinking();
+        // 优先流式累积文本（覆盖工具调用前的解释文本），与后端 done.reply 保持一致。
+        const reply = (data && typeof data.reply === "string") ? data.reply : "";
+        const finalText = accText || reply;
+        if (finalText) {
+            msg.replaceChildren(renderMarkdown(finalText));
+            streamThrottle.textCurrent = finalText;
+        }
+        await loadSidebar();
+    };
+
+    const handleError = (errText) => {
+        endStream();
+        clearThinking();
+        const errTxt = errText || t(`${S}.stream_error`, "连接中断，请重试");
+        msg.replaceChildren(renderMarkdown(errTxt));
+        showToast(errTxt, "error");
+    };
+
+    const handlers = {
+        onMessage(msgEvt) {
+            const data = msgEvt && msgEvt.parsed;
+            if (!data || typeof data !== "object") return;
+            const type = data.type;
+            // finish 帧放行（即使 done 已置 streamDone），保证 pending 预览卡不丢失。
+            if (streamDone && type !== "finish") return;
+            if (type === "meta") {
+                if (data.conversation_id) currentCid = data.conversation_id;
+            } else if (type === "delta") {
+                handleDelta(data);
+            } else if (type === "tool") {
+                if (data && (data.name || data.args)) {
+                    showToolHint(data.name || "");
+                }
+            } else if (type === "done") {
+                if (data && data.conversation_id) currentCid = data.conversation_id;
+                // done 帧无 pending（真正 pending 在 finish 帧），先清空避免残留旧预览。
+                pending = null;
+                renderPending();
+                handleEnd(data).then(() => {});
+            } else if (type === "finish") {
+                if (data && data.conversation_id) currentCid = data.conversation_id;
+                if (data && data.pending && pendingOpsList(data.pending).length > 0) {
+                    pending = data.pending;
+                    appliedPending = null;
+                } else {
+                    pending = null;
+                }
+                renderPending();
+                handleEnd(data).then(() => {});
+            } else if (type === "error") {
+                handleError(data.message);
+            }
+        },
+        onError(err) {
+            // HTTP 非 2xx / 连接中断
+            handleError((err && err.message) || t(`${S}.stream_error`, "连接中断，请重试"));
+        },
+    };
+
+    try {
+        await bridge.subscribeSSE("agent/chat/stream", handlers, payload);
+        // 等待流真正结束（done/finish/error/断连），期间保持 busy。
+        await streamFinished;
+    } catch (e) {
+        // subscribeSSE reject：回退到非流式 POST（原样可用）
+        if (streamDone) return;
+        handleError(t(`${S}.fallback_post`, "已切换为普通模式"));
+        try {
+            msg.remove();
+            await postNonStreaming(body, text);
+        } catch (e2) {
+            // 兜底：不再崩溃
+        }
     }
 }
 

@@ -16,12 +16,12 @@ import copy
 from datetime import datetime
 
 from astrbot.api import logger
-from astrbot.api.web import error_response, json_response, request
+from astrbot.api.web import error_response, json_response, request, stream_response
 
 # 注意：AstrBot 以包形式加载插件，包内导入必须使用相对导入。
 from ..scheduler import agent_tools
 from ..scheduler import compat
-from ..scheduler.agent import run_web_agent
+from ..scheduler.agent import run_web_agent, run_web_agent_stream
 from ..scheduler.groups import GROUP_STRATEGIES
 from ..scheduler.lifecycle import LIFECYCLE_TEMPLATES
 from ..scheduler.presets import PRESETS, build_preset_rules
@@ -168,6 +168,7 @@ def register_all(plugin):
     _register(plugin, "export", ["GET"], "导出配置", _handler_export)
     _register(plugin, "import", ["POST"], "导入配置", _handler_import)
     _register(plugin, "providers", ["GET"], "可用 Provider 列表", _handler_providers)
+    _register(plugin, "platforms", ["GET"], "已注册平台实例列表", _handler_platforms)
 
     # ---- v0.1.5：时间调度规则（temporal）----
     _register(plugin, "temporal", ["GET"], "时间调度规则列表", _handler_temporal_list)
@@ -204,6 +205,13 @@ def register_all(plugin):
     # ---- v0.1.5：Agent 配置层 / 审计 ----
     _register(plugin, "agent/pending", ["GET"], "待应用更改", _handler_agent_pending)
     _register(plugin, "agent/chat", ["POST"], "AI 配置助手对话", _handler_agent_chat)
+    _register(
+        plugin,
+        "agent/chat/stream",
+        ["GET"],
+        "AI 配置助手流式对话（SSE）",
+        _handler_agent_chat_stream,
+    )
     _register(plugin, "agent/apply", ["POST"], "应用 AI 助手更改", _handler_agent_apply)
     _register(
         plugin,
@@ -795,6 +803,29 @@ async def _handler_providers(plugin):
         return error_response(str(exc), status_code=500)
 
 
+async def _handler_platforms(plugin):
+    """返回已注册平台实例列表 `[{id, name}]`（供前端构造 UMO 预览与下拉选择）。
+
+    遍历 ``context.platform_manager.get_insts()``，每个实例取 ``inst.meta()`` 的
+    ``id`` 与 ``name``；单个实例 meta 解析失败不影响其它实例。
+    """
+    try:
+        rows: list[dict] = []
+        for inst in plugin.context.platform_manager.get_insts():
+            try:
+                meta = inst.meta()
+                pid = str(meta.id) if getattr(meta, "id", None) else ""
+                pname = str(meta.name) if getattr(meta, "name", None) else ""
+                if pid:
+                    rows.append({"id": pid, "name": pname})
+            except Exception:  # noqa: BLE001 - 单实例 meta 解析失败跳过
+                logger.warning("web.platforms: 解析平台实例 meta 失败", exc_info=True)
+        return json_response(rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("web.platforms 异常")
+        return error_response(str(exc), status_code=500)
+
+
 # ---------------------------------------------------------------------- #
 # v0.1.5：时间调度规则（temporal）
 # ---------------------------------------------------------------------- #
@@ -1193,6 +1224,90 @@ async def _handle_agent_chat_legacy(plugin, payload: dict):
     if isinstance(result, dict) and result.get("error"):
         return error_response(result["error"], status_code=500)
     return json_response(result)
+
+
+async def _handler_agent_chat_stream(plugin):
+    """AI 配置助手流式对话（SSE）。
+
+    query 参数：``content``（必填）、``conversation_id``（可选）。会话持久化语义与
+    ``POST agent/chat`` 完全一致：cid 存在则续用，否则自动新建；用户消息先写入
+    ChatStore，``run_web_agent_stream`` 流式驱动 Agent，``done`` 帧时把完整回复写回
+    assistant 消息，``error`` 帧时不写半截 assistant 直接结束。
+
+    返回 ``text/event-stream``，每个事件为 ``data: <json>\\n\\n``（前端 bridge 的
+    SSE 解析依赖 ``data:`` 前缀）。事件帧顺序：``meta`` →（``delta``/``tool``）*
+    → ``done``（后接 ``finish``）/ ``error``。
+    """
+    try:
+        content = request.query.get("content", "") or ""
+        content = content.strip()
+        if not content:
+            return error_response("缺少 content 参数", status_code=400)
+        cid = request.query.get("conversation_id", "") or ""
+        conv = plugin.chats.get_conversation(cid) if cid else None
+        if conv is None:
+            conv = plugin.chats.new_conversation(content)  # 标题取首条用户消息
+        conv_id = conv["id"]
+        plugin.chats.append_message(conv_id, "user", content)
+        conv = plugin.chats.get_conversation(conv_id)
+        title = conv.get("title", "")
+        pid = await _resolve_agent_provider(plugin)
+        if not pid:
+            return error_response("无可用聊天 Provider", status_code=400)
+        history = [{"role": m["role"], "content": m["content"]} for m in conv["messages"]]
+        # 只把最近 60 条发给 LLM（防 token 超限），与 POST 流程一致。
+        return stream_response(
+            _agent_chat_stream_gen(plugin, pid, conv_id, title, history[-60:]),
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("web.agent/chat/stream 异常")
+        return error_response(str(exc), status_code=500)
+
+
+async def _agent_chat_stream_gen(plugin, pid: str, cid: str, title: str, history: list):
+    """SSE 事件生成器：meta → stream 事件 → done/finish 或 error。
+
+    帧契约（与 ``scheduler.agent.run_web_agent_stream`` 产出的事件完全一致）：
+    - ``meta``：会话元信息（conversation_id / title），本生成器首先发出；
+    - ``delta`` / ``tool``：透传 stream 的增量文本与工具提示帧；
+    - ``done``：完整回复已产出，随后把 assistant 消息写回 ChatStore 并追发 ``finish``
+      （含 conversation_id 与待应用 pending，与 POST 流程返回的 pending 保持一致）；
+    - ``error``：流中出错，不写 assistant 消息（避免半截），直接结束。
+    """
+    import json as _json
+
+    def _frame(ev: dict) -> str:
+        return f'data: {_json.dumps(ev, ensure_ascii=False)}\n\n'
+
+    yield _frame({"type": "meta", "conversation_id": cid, "title": title})
+    try:
+        async for ev in run_web_agent_stream(
+            plugin.context, plugin.tool_ctx, history, pid
+        ):
+            yield _frame(ev)
+            if ev.get("type") == "done":
+                # 完整回复已产出，写回 assistant 消息（与 POST 流程一致）。
+                try:
+                    plugin.chats.append_message(cid, "assistant", ev.get("reply", ""))
+                except Exception:  # noqa: BLE001 - 写回失败不阻断流结束
+                    logger.warning(
+                        "web.agent/chat/stream: 写回 assistant 消息失败", exc_info=True
+                    )
+                _audit(plugin, "agent_chat", cid, detail="已保存会话消息（流式）")
+                yield _frame(
+                    {
+                        "type": "finish",
+                        "conversation_id": cid,
+                        "pending": plugin.tool_ctx.pending.get(),
+                    }
+                )
+            elif ev.get("type") == "error":
+                # 出错：不写半截 assistant，直接结束。
+                return
+    except Exception as exc:  # noqa: BLE001 - 流生成异常兜底，产出 error 帧结束
+        logger.exception("web.agent/chat/stream 流生成异常")
+        yield _frame({"type": "error", "message": str(exc)})
 
 
 async def _handler_agent_conversations(plugin):
