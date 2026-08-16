@@ -1061,3 +1061,138 @@ input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--primary)
 .tag-chip-x:hover { opacity:1; }
 .tag-input-field { width:100%; border:0; outline:0; background:transparent; color:var(--text); font-size:0.85rem; padding:3px 0; }
 .tag-input-field::placeholder { color:var(--text-3); }
+
+/* ============ v1.0.2 AI 助手 · Markdown 渲染 + 流式 ============
+   仅作用于 assistant 气泡（.chat-msg-md 容器）。全部走双主题 CSS 变量，
+   不硬编码色值；代码块深色底用 color-mix 派生，避免破坏浅/深双主题。 */
+.chat-msg-md {
+    font-size: 0.85rem;
+    line-height: 1.6;
+    padding: 2px 0;
+}
+.chat-msg-md .thinking { color: var(--text-3); font-style: italic; }
+
+.chat-msg-md > *:first-child { margin-top: 0; }
+.chat-msg-md > *:last-child { margin-bottom: 0; }
+
+.chat-msg-md p { margin: 0.45em 0; }
+.chat-msg-md p:first-child { margin-top: 0; }
+.chat-msg-md p:last-child { margin-bottom: 0; }
+
+.chat-msg-md h1,
+.chat-msg-md h2,
+.chat-msg-md h3,
+.chat-msg-md h4 {
+    margin: 0.7em 0 0.35em;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--text);
+}
+.chat-msg-md h1 { font-size: 1.15em; }
+.chat-msg-md h2 { font-size: 1.06em; }
+.chat-msg-md h3 { font-size: 1em; }
+.chat-msg-md h4 { font-size: 0.93em; }
+
+.chat-msg-md ul,
+.chat-msg-md ol {
+    margin: 0.4em 0;
+    padding-left: 1.5em;
+}
+.chat-msg-md li { margin: 0.18em 0; }
+
+.chat-msg-md code {
+    font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+    font-size: 0.86em;
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    color: var(--text);
+    padding: 0.12em 0.35em;
+    border-radius: 5px;
+    word-break: break-word;
+}
+.chat-msg-md pre {
+    margin: 0.55em 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--bg) 82%, #000 18%);
+    border: 1px solid var(--border);
+    overflow-x: auto;
+}
+.chat-msg-md pre code {
+    background: transparent;
+    padding: 0;
+    border: none;
+    color: var(--text);
+    font-size: 0.8em;
+    line-height: 1.55;
+    display: block;
+    white-space: pre;
+}
+.chat-msg-md blockquote {
+    margin: 0.5em 0;
+    padding: 0.1em 0.9em;
+    border-left: 3px solid var(--primary);
+    color: var(--text-2);
+    background: var(--primary-light);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.chat-msg-md blockquote p { margin: 0.35em 0; }
+
+.chat-msg-md a {
+    color: var(--primary);
+    text-decoration: none;
+}
+.chat-msg-md a:hover { text-decoration: underline; }
+
+.chat-msg-md table {
+    border-collapse: collapse;
+    margin: 0.55em 0;
+    font-size: 0.82em;
+    width: 100%;
+    display: block;
+    overflow-x: auto;
+}
+.chat-msg-md th,
+.chat-msg-md td {
+    border: 1px solid var(--border);
+    padding: 5px 9px;
+    text-align: left;
+    vertical-align: top;
+}
+.chat-msg-md th {
+    background: var(--surface-2);
+    font-weight: 600;
+    color: var(--text);
+}
+.chat-msg-md hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0.7em 0;
+}
+
+.chat-msg-md strong, .chat-msg-md b { font-weight: 600; color: var(--text); }
+.chat-msg-md em, .chat-msg-md i { font-style: italic; }
+
+/* 流式工具提示：小字、次要色、斜体 */
+.chat-tool-hint {
+    display: block;
+    margin-top: 6px;
+    font-size: 0.72rem;
+    color: var(--text-3);
+    font-style: italic;
+}
+
+/* ============ v1.0.2 · UMO 实时预览（模块 F2） ============
+   平台下拉与各输入框下方的只读 UMO 换算小字。等宽字体、次要色，适配双主题。 */
+.umo-platform-field { grid-column: 1 / -1; }
+.umo-preview {
+    font-size: 0.76rem;
+    line-height: 1.5;
+    color: var(--text-3);
+    font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+    word-break: break-all;
+    white-space: pre-wrap;
+    min-height: 1.2em;
+}
+.umo-preview:empty::before {
+    content: "\00a0";
+}

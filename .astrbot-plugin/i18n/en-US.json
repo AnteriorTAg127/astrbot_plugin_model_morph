@@ -217,6 +217,10 @@
         "scope_sessions": "Sessions UMO (comma-separated, empty=global)",
         "scope_hint": "Empty=global; scoped rules take precedence over global rules",
         "scope_global": "Global",
+        "umo_platform": "Platform",
+        "umo_preview": "UMO Preview",
+        "umo_preview_hint": "Enter group/QQ to preview UMO",
+        "umo_session_hint": "Session UMO is used as-is",
         "source_wizard": "Wizard",
         "source_preset": "Preset",
         "source_manual": "Manual"
@@ -255,7 +259,11 @@
         "scope_users": "Users (comma-separated, empty=global)",
         "scope_sessions": "Sessions UMO (comma-separated, empty=global)",
         "scope_hint": "Empty=global; scoped policies take precedence over global ones",
-        "scope_global": "Global"
+        "scope_global": "Global",
+        "umo_platform": "Platform",
+        "umo_preview": "UMO Preview",
+        "umo_preview_hint": "Enter group/QQ to preview UMO",
+        "umo_session_hint": "Session UMO is used as-is"
       },
       "sessions": {
         "title": "Active Sessions",
@@ -335,7 +343,11 @@
         "elapsed_ms": "Elapsed",
         "skipped": "Scheduling skipped",
         "condition": "Condition",
-        "no_matched_rule": "No rule matched"
+        "no_matched_rule": "No rule matched",
+        "umo_platform": "Platform",
+        "umo_preview": "UMO Preview",
+        "umo_preview_hint": "Enter group/QQ to preview UMO",
+        "umo_session_hint": "Session UMO is used as-is"
       },
       "settings": {
         "title": "Settings",
@@ -378,6 +390,10 @@
         "placeholder": "Describe your scheduling need, e.g. use a cheap model from 20:00 to 02:00 every night…",
         "send": "Send",
         "thinking": "Thinking…",
+        "tool_using": "Using tool",
+        "stream_error": "Connection lost, please retry",
+        "fallback_post": "Switched to normal mode",
+        "send_fail": "Send failed, please retry",
         "timezone_label": "Active schedule timezone",
         "welcome": "Hi, I am the model scheduling config assistant. Tell me what you want in Chinese or English, such as the examples below.",
         "apply": "Apply changes",
@@ -455,7 +471,11 @@
         "scope_groups": "Groups (comma-separated)",
         "scope_users": "Users (comma-separated)",
         "scope_sessions": "Sessions UMO (comma-separated)",
-        "scope_hint": "Empty=global; scoped rules take precedence over global rules"
+        "scope_hint": "Empty=global; scoped rules take precedence over global rules",
+        "umo_platform": "Platform",
+        "umo_preview": "UMO Preview",
+        "umo_preview_hint": "Enter group/QQ to preview UMO",
+        "umo_session_hint": "Session UMO is used as-is"
       },
       "presets": {
         "title": "Time Rule Presets",

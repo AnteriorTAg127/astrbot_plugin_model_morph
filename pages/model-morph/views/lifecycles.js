@@ -7,7 +7,7 @@
 // 全部动态文本走 textContent / el()，防 XSS；删除走 confirmDialog()。
 // ==========================================================================
 import { bridge, t, el, showToast, confirmDialog } from "../common.js";
-import { refData, buildGroupSelect, buildTagInput } from "./shared.js";
+import { refData, buildGroupSelect, buildTagInput, initUmoPlatformSelect, renderUmoPreview } from "./shared.js";
 
 let seq = 0;
 let draft = null;
@@ -189,16 +189,49 @@ function renderEditor() {
     scopeCard.appendChild(el("div", "section-title", t("pages.model-morph.lifecycles.scope", "限定群组")));
     scopeCard.appendChild(el("div", "hint", t("pages.model-morph.lifecycles.scope_hint", "留空=全局策略；限定命中的策略优先于全局策略生效")));
     const scope = draft.scope && typeof draft.scope === "object" ? draft.scope : { groups: [], users: [], sessions: [] };
+
+    // F2：平台下拉 + 三输入 UMO 实时预览
+    const S_LC = "pages.model-morph.lifecycles";
+    const umoPlatSel = el("select", "input input-select");
+    const umoPlatField = el("div", "form-field umo-platform-field");
+    umoPlatField.appendChild(el("label", null, t(`${S_LC}.umo_platform`, "平台")));
+    umoPlatField.appendChild(umoPlatSel);
+    scopeCard.appendChild(umoPlatField);
+    scopeCard.appendChild(el("div", "hint umo-preview", t(`${S_LC}.umo_preview_hint`, "输入群号/QQ 后显示 UMO 预览")));
+
     const scopeMap = [
-        ["groups", t("pages.model-morph.lifecycles.scope_groups", "群组")],
-        ["users", t("pages.model-morph.lifecycles.scope_users", "用户")],
-        ["sessions", t("pages.model-morph.lifecycles.scope_sessions", "会话")],
+        ["groups", t(`${S_LC}.scope_groups`, "群组")],
+        ["users", t(`${S_LC}.scope_users`, "用户")],
+        ["sessions", t(`${S_LC}.scope_sessions`, "会话")],
     ];
+    const umoRefresh = [];
     for (const [key, label] of scopeMap) {
-        scopeCard.appendChild(
-            lbField(label, buildTagInput(Array.isArray(scope[key]) ? scope[key] : [], (arr) => { draft.scope[key] = arr; }))
-        );
+        const field = el("div", "form-field");
+        field.appendChild(el("label", null, label));
+        const tagInput = buildTagInput(Array.isArray(scope[key]) ? scope[key] : [], (arr) => { draft.scope[key] = arr; });
+        field.appendChild(tagInput);
+        const preview = el("div", "umo-preview");
+        field.appendChild(preview);
+        scopeCard.appendChild(field);
+
+        const inner = tagInput.querySelector(".tag-input-field");
+        const hint = t(`${S_LC}.umo_preview_hint`, "输入群号/QQ 后显示 UMO 预览");
+        const sessionHint = t(`${S_LC}.umo_session_hint`, "会话 UMO 将原样使用");
+        const refresh = () => {
+            const val = inner ? inner.value.trim() : "";
+            if (key === "groups") {
+                renderUmoPreview(preview, { platformId: umoPlatSel.value, groupId: val, userId: "", sessionId: "", emptyHint: hint });
+            } else if (key === "users") {
+                renderUmoPreview(preview, { platformId: umoPlatSel.value, groupId: "", userId: val, sessionId: "", emptyHint: hint });
+            } else {
+                renderUmoPreview(preview, { platformId: "", groupId: "", userId: "", sessionId: val, emptyHint: sessionHint });
+            }
+        };
+        if (inner) inner.addEventListener("input", refresh);
+        umoRefresh.push(refresh);
     }
+    umoPlatSel.addEventListener("change", () => umoRefresh.forEach((fn) => fn()));
+    initUmoPlatformSelect(umoPlatSel).then(() => umoRefresh.forEach((fn) => fn()));
     card.appendChild(scopeCard);
 
     const actions = el("div", "toolbar");

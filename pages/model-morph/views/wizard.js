@@ -14,7 +14,7 @@
 // 全部动态文本 textContent / el()，防 XSS。
 // ==========================================================================
 import { bridge, t, el, showToast } from "../common.js";
-import { refData, buildGroupSelect, buildProviderSelect, buildTagInput } from "./shared.js";
+import { refData, buildGroupSelect, buildProviderSelect, buildTagInput, initUmoPlatformSelect, renderUmoPreview } from "./shared.js";
 
 const S = "pages.model-morph.wizard";
 
@@ -322,18 +322,48 @@ function renderStep5() {
     const scopeHint = el("div", "hint", t(`${S}.scope_hint`, "留空=全局规则；限定命中的规则优先于全局规则生效"));
     box.appendChild(scopeHint);
 
+    // F2：平台下拉 + 三输入 UMO 实时预览（平台默认 aiocqhttp 或首个平台实例）
+    const umoPlatSel = el("select", "input input-select");
+    const umoPlatField = el("div", "form-field umo-platform-field");
+    umoPlatField.appendChild(el("label", null, t(`${S}.umo_platform`, "平台")));
+    umoPlatField.appendChild(umoPlatSel);
+    box.appendChild(umoPlatField);
+    box.appendChild(el("div", "hint umo-preview", t(`${S}.umo_preview_hint`, "输入群号/QQ 后显示 UMO 预览")));
+
     const scopeFields = [
         { key: "scopeGroups", label: t(`${S}.scope_groups`, "限定群组（逗号分隔）") },
         { key: "scopeUsers", label: t(`${S}.scope_users`, "限定用户（逗号分隔）") },
-        { key: "scopeSessions", label: t(`${S}.scope_sessions`, "限定会话（逗号分隔）") },
+        { key: "scopeSessions", label: t(`${S}.scope_sessions`, "限定会话 UMO（逗号分隔）") },
     ];
+    const umoRefresh = [];
     for (const sf of scopeFields) {
         const wrap = el("div", "form-field");
         wrap.appendChild(el("label", null, sf.label));
         // 标签式输入：回车挂标签；state 存逗号串，提交时展开为数组。
-        wrap.appendChild(buildTagInput(splitCsv(state[sf.key]), (arr) => { state[sf.key] = arr.join(","); }));
+        const tagInput = buildTagInput(splitCsv(state[sf.key]), (arr) => { state[sf.key] = arr.join(","); });
+        wrap.appendChild(tagInput);
+        const preview = el("div", "umo-preview");
+        wrap.appendChild(preview);
         box.appendChild(wrap);
+
+        const inner = tagInput.querySelector(".tag-input-field");
+        const hint = t(`${S}.umo_preview_hint`, "输入群号/QQ 后显示 UMO 预览");
+        const sessionHint = t(`${S}.umo_session_hint`, "会话 UMO 将原样使用");
+        const refresh = () => {
+            const val = inner ? inner.value.trim() : "";
+            if (sf.key === "scopeGroups") {
+                renderUmoPreview(preview, { platformId: umoPlatSel.value, groupId: val, userId: "", sessionId: "", emptyHint: hint });
+            } else if (sf.key === "scopeUsers") {
+                renderUmoPreview(preview, { platformId: umoPlatSel.value, groupId: "", userId: val, sessionId: "", emptyHint: hint });
+            } else {
+                renderUmoPreview(preview, { platformId: "", groupId: "", userId: "", sessionId: val, emptyHint: sessionHint });
+            }
+        };
+        if (inner) inner.addEventListener("input", refresh);
+        umoRefresh.push(refresh);
     }
+    umoPlatSel.addEventListener("change", () => umoRefresh.forEach((fn) => fn()));
+    initUmoPlatformSelect(umoPlatSel).then(() => umoRefresh.forEach((fn) => fn()));
 
     return box;
 }

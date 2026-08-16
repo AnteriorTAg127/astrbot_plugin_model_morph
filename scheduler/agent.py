@@ -21,10 +21,16 @@ import json
 from typing import Any
 
 from astrbot.api import logger
+from astrbot.core.agent.hooks import BaseAgentRunHooks
 from astrbot.core.agent.message import Message
 from astrbot.core.agent.run_context import ContextWrapper
+from astrbot.core.agent.runners.tool_loop_agent_runner import ToolLoopAgentRunner
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult, ToolSet
-from astrbot.core.astr_agent_context import AstrAgentContext
+from astrbot.core.astr_agent_context import AgentContextWrapper, AstrAgentContext
+from astrbot.core.astr_agent_tool_exec import FunctionToolExecutor
+from astrbot.core.message.components import Json, Plain
+from astrbot.core.provider.entities import ProviderRequest
+from astrbot.core.utils.astrbot_path import get_astrbot_system_tmp_path
 from pydantic import Field
 from pydantic.dataclasses import dataclass
 
@@ -37,6 +43,40 @@ CONFIG_AGENT_SYSTEM_PROMPT = (
     "（模型组、时间调度规则、全局状态）。你的所有解释和汇报都使用中文。\n\n"
     "【你的身份】你是 AstrBot 插件 Model Morph 的配置助手。你只能通过调用下面提供的结构化工具"
     "来读取或修改配置，除此之外不要编造任何配置内容。\n\n"
+    "【会话与 UMO（务必遵守）】\n"
+    "AstrBot 用 UMO（统一消息来源）唯一标识一个会话。UMO 官方格式为："
+    "``platform_id:message_type:session_id``。\n"
+    "- platform_id：平台适配器实例唯一标识（如 aiocqhttp / webchat / telegram），同一类型"
+    "可多实例；\n"
+    "- message_type：消息类型，取值 ``GroupMessage``（群聊）、``FriendMessage``（私聊）、"
+    "``OtherMessage``（其他）三者之一；\n"
+    "- session_id：来源 ID——aiocqhttp 群消息为群号、私聊为发送者 QQ 号。\n"
+    "处理规则：\n"
+    "- 用户给出**完整 UMO**（如 aiocqhttp:GroupMessage:123456）时，原样用在 ``scope.sessions``，"
+    "不做改写；\n"
+    "- 用户给出**群号**（一串数字且语境是群）时，换算为 ``{platform_id}:GroupMessage:{群号}``；\n"
+    "- 用户给出 **QQ 号**（一串数字且语境是私聊/好友）时，换算为 "
+    "``{platform_id}:FriendMessage:{QQ}``；\n"
+    '- ``scope`` 结构为 ``{"groups": [群号...], "users": [QQ...], "sessions": [完整 UMO...]}``：'
+    "groups 存群号、users 存 QQ 号、sessions 存完整 UMO（含平台类型信息）。三个键都为空表示"
+    "全局作用域。\n"
+    "- 换算时 platform_id 沿用用户上下文给出的平台（默认 aiocqhttp）；无法确定时向管理员确认"
+    "平台后再换算。示例：群 123456 → aiocqhttp:GroupMessage:123456；QQ 987654 → "
+    "aiocqhttp:FriendMessage:987654。\n\n"
+    "【需求分类（重要，先判断再选工具）】接到管理员关于调度的需求时，先判断它属于下面哪一类，"
+    "再调用对应工具，避免调错工具：\n"
+    "a) 时间调度规则（temporal）：按时间段 / 星期 / 日期路由模型或整组。触发词如「几点到几点」"
+    "「每天 / 每周」「高峰时段」「晚上用便宜模型」。→ 用 create_schedule_rule / "
+    "update_schedule_rule（kind=model_override=按小时替换本组内某 Provider "
+    "kind=group_switch=本组请求走另一组）。\n"
+    "b) 生命周期（lifecycle）：按会话轮数多阶段降级 / 周期校准 / 上下文压缩校准。触发词如"
+    "「前 N 轮用 X，之后用 Y / 降级 / 校准」。→ 用 create_lifecycle / update_lifecycle。\n"
+    "c) 规则引擎规则（when/then 条件规则）：本版 Agent 工具集**不提供**对应的写工具。若用户"
+    "明确要求「条件规则 / 事件规则」，如实说明可在 WebUI 规则页配置，不要尝试用其他工具硬造。\n"
+    "d) 含糊词「调度」：先用查询工具（list_schedule_rules / list_lifecycles）了解现有配置；仍"
+    "无法确定管理员意图时，向管理员确认后再执行，不要擅自猜测创建。\n"
+    "e) 防止多余调用：一句需求**只触发一次**写流程；禁止对同一目标重复 create；任何 create / "
+    "update 之前必须先用查询工具确认目标存在及当前值（先查询再修改）。\n\n"
     "【你的职责（8 条）】\n"
     "1. 查询并解释当前配置：模型组、Provider、现有规则、生效中的时间调度规则、调度器状态。\n"
     "2. 创建模型组，并支持向组内指定 Provider。\n"
@@ -117,41 +157,81 @@ def build_config_toolset(tc: ToolContext) -> ToolSet:
 
     # 每个工具独立声明的人性化名称与参数（调用方 agent 据此生成 JSON Schema）。
     tool_defs: list[tuple[str, str, dict, Any]] = [
-        ("tool_list_model_groups", "列出全部模型组（id/name/enabled/策略/成员数）", {}),
+        (
+            "tool_list_model_groups",
+            "查询全部模型组。返回值每个条目含：id（组唯一标识）、name（组名）、enabled（是否启用）、"
+            "strategy（组选择策略）、provider_count（成员 Provider 数）。用于动手前确认组 id / 现状。",
+            {},
+        ),
         (
             "tool_get_model_group",
-            "按组 id 或名称查询模型组详情",
+            "按组 id 或名称查询单个模型组详情（含完整 strategy / providers / fallbacks 配置）。"
+            "未精确命中时返回 candidates（模糊匹配建议）。",
             {"name": "组 id 或名称"},
         ),
         (
             "tool_list_models",
-            "列出已配置 Provider（id/model/type/enabled/所属组数）",
+            "列出已配置的所有聊天 Provider。返回值条目含：id（Provider 唯一标识）、model（模型名）、"
+            "type（服务类型）、enabled（是否启用）、group_count（被多少个组引用）。用于确认 Provider 真实 id。",
             {},
         ),
-        ("tool_list_rules", "列出现有规则与时间调度规则", {}),
-        ("tool_get_active_rules", "列出当前时刻生效的时间调度规则", {}),
-        ("tool_get_scheduled_rules", "列出全部时间调度规则", {}),
-        ("tool_get_scheduler_status", "获取调度器状态（开关/时区/数量/冲突）", {}),
-        ("tool_get_runtime_routing", "只读推演某组当前最终路由", {}),
+        (
+            "tool_list_rules",
+            "查询现有规则与时间调度规则。返回值含：rules（when/then 条件规则，本版无写工具，仅读）、"
+            "temporal_rules（时间调度规则）。用于「含糊调度词」时先查看现状。",
+            {},
+        ),
+        (
+            "tool_get_active_rules",
+            "列出当前时刻正在生效的时间调度规则（按时间匹配）。用于了解此刻哪些规则在起作用。",
+            {},
+        ),
+        (
+            "tool_get_scheduled_rules",
+            "列出全部时间调度规则（含未启用的）。返回值条目含 kind / schedule / scope / priority / enabled。",
+            {},
+        ),
+        (
+            "tool_get_scheduler_status",
+            "获取调度器全局状态。返回值字段含义：enabled（开关）、tz（调度时区）、group_count（模型组数）、"
+            "rule_count（条件规则数）、temporal_count（时间调度规则数）、provider_count（已配置 Provider 数）、"
+            "base_group（基础默认组）、lifecycle_count（生命周期数）、default_lifecycle（全局默认生命周期 id）、"
+            "agent_confirm（是否要求高危预览确认）、conflicts（规则冲突数）。",
+            {},
+        ),
+        (
+            "tool_get_runtime_routing",
+            "只读推演：某模型组在当前时间 / 会话条件下的最终路由。返回值字段含义：group_id（目标组）、"
+            "provider（最终 Provider id）、temporal_matched_id（命中的时间调度规则 id，未命中为空）、"
+            "replacement_chain（替换链，A→B 逐级）、reason（推演说明）。不改动任何配置。",
+            {},
+        ),
         (
             "tool_create_model_group",
-            "创建模型组",
+            "创建模型组。spec 字段说明："
+            "name（组名，必填）、desc（描述）、enabled（是否启用，默认 true）、"
+            "strategy（组内选 Provider 策略，五枚举：priority=按 priority 取最高可用 / "
+            "round_robin=轮流 / weighted=按 weight 权重随机 / random=等权随机 / fallback=优先第一个"
+            "失败则降级到下一个）、"
+            "providers（成员列表，条目为 {provider_id: 已配置 Provider id, priority: 调用优先级"
+            "（数字越小越优先）, weight: 权重（weighted 策略用）, enabled: 是否启用成员}）、"
+            "fallbacks（降级 Provider id 列表，主链全部失败后依次兜底）。所有 provider_id 必须先查询确认。",
             {
                 "spec": {
                     "type": "object",
                     "description": (
                         '模型组字典：{"name": 组名, "desc": 描述, "enabled": bool, '
-                        '"strategy": "priority"|"round_robin"|"weighted"|"random"|'
-                        '"fallback", "providers": [{"provider_id": 已配置Provider id, '
-                        '"priority": int, "weight": int, "enabled": bool}], '
-                        '"fallbacks": [Provider id 列表]}'
+                        '"strategy": "priority"|"round_robin"|"weighted"|"random"|"fallback", '
+                        '"providers": [{"provider_id": 已配置Provider id, "priority": int, '
+                        '"weight": int, "enabled": bool}], "fallbacks": [Provider id 列表]}'
                     ),
                 }
             },
         ),
         (
             "tool_update_model_group",
-            "更新模型组",
+            "更新模型组（合并式：只写需要改的键）。group_id 为要更新的组 id；spec 结构同 "
+            "create_model_group。strategy 五枚举与 providers 条目含义见 create_model_group。",
             {
                 "group_id": "组 id",
                 "spec": {
@@ -162,28 +242,36 @@ def build_config_toolset(tc: ToolContext) -> ToolSet:
         ),
         (
             "tool_delete_model_group",
-            "删除模型组（高危，需预览）",
+            "删除模型组（高危，若 agent_confirm 开启需先 preview 再 apply）。group_id 为目标组 id。",
             {"group_id": "组 id"},
         ),
         (
             "tool_create_schedule_rule",
-            "创建时间调度规则",
+            "创建时间调度规则。spec："
+            "kind 二枚举：model_override=把作用域内本组选用的 source_provider 替换为 target_provider；"
+            "group_switch=作用域内本组（group_id）的请求改走 target_group 组。"
+            "group_id：规则作用的组 id，为空串表示全局规则。source_provider/target_provider（kind=model_override 用）、"
+            "target_group（kind=group_switch 用）须先用查询确认存在。"
+            "schedule 四类型：always=始终 / daily=每天（需 start/end 为 24h 制 HH:MM，end<start 表示跨午夜）/"
+            "weekly=每周（需 weekdays 0=周一..6=周日，必填）/ date=指定日期（需 date 为 YYYY-MM-DD）。"
+            "priority：int，越高越先匹配。scope 结构 {\"groups\": [群号...], \"users\": [QQ...], "
+            "\"sessions\": [完整UMO...]}，三键全空=全局。",
             {
                 "spec": {
                     "type": "object",
                     "description": (
-                        '时间调度规则字典：{kind: "model_override"|"group_switch", '
-                        'group_id: ""（全局）或组 id, source_provider, target_provider, '
-                        'target_group, schedule: {type: "always"|"daily"|"weekly"|'
-                        '"date", start: "HH:MM", end: "HH:MM", weekdays: [0-6], '
-                        'date: "YYYY-MM-DD"}, priority: int}'
+                        '时间调度规则字典：{kind: "model_override"|"group_switch", group_id: ""（全局）或组 id, '
+                        'source_provider, target_provider, target_group, schedule: {type: "always"|"daily"|'
+                        '"weekly"|"date", start: "HH:MM", end: "HH:MM", weekdays: [0-6]（weekly 必填）, '
+                        'date: "YYYY-MM-DD"}, priority: int, scope: {"groups": [], "users": [], "sessions": []}}'
                     ),
                 }
             },
         ),
         (
             "tool_update_schedule_rule",
-            "更新时间调度规则",
+            "更新时间调度规则（合并式）。rule_id 为目标规则 id；spec 结构同 create_schedule_rule，"
+            "kind 二枚举与 schedule 四类型约束见 create_schedule_rule。",
             {
                 "rule_id": "规则 id",
                 "spec": {
@@ -194,14 +282,23 @@ def build_config_toolset(tc: ToolContext) -> ToolSet:
         ),
         (
             "tool_delete_schedule_rule",
-            "删除时间调度规则（高危，需预览）",
+            "删除时间调度规则（高危，若 agent_confirm 开启需先 preview 再 apply）。rule_id 为目标规则 id。",
             {"rule_id": "规则 id"},
         ),
-        ("tool_enable_schedule_rule", "启用时间调度规则", {"rule_id": "规则 id"}),
-        ("tool_disable_schedule_rule", "停用时间调度规则", {"rule_id": "规则 id"}),
+        (
+            "tool_enable_schedule_rule",
+            "启用一条时间调度规则。rule_id 为目标规则 id；启用后立即参与匹配。",
+            {"rule_id": "规则 id"},
+        ),
+        (
+            "tool_disable_schedule_rule",
+            "停用一条时间调度规则。rule_id 为目标规则 id；停用后不再命中。",
+            {"rule_id": "规则 id"},
+        ),
         (
             "tool_create_model_override",
-            "创建模型替换规则（model_override）",
+            "创建模型替换规则（便捷封装，kind 固定为 model_override）。spec：把作用域内本组选用的 "
+            "source_provider 替换为 target_provider（schedule / scope / priority 约束同 create_schedule_rule）。",
             {
                 "spec": {
                     "type": "object",
@@ -211,7 +308,7 @@ def build_config_toolset(tc: ToolContext) -> ToolSet:
         ),
         (
             "tool_update_model_override",
-            "更新模型替换规则",
+            "更新模型替换规则（合并式，kind 固定为 model_override）。rule_id 为目标规则 id。",
             {
                 "rule_id": "规则 id",
                 "spec": {
@@ -222,43 +319,71 @@ def build_config_toolset(tc: ToolContext) -> ToolSet:
         ),
         (
             "tool_delete_model_override",
-            "删除模型替换规则（高危，需预览）",
+            "删除模型替换规则（高危，若 agent_confirm 开启需先 preview 再 apply）。rule_id 为目标规则 id。",
             {"rule_id": "规则 id"},
         ),
-        ("tool_validate_configuration", "全量校验当前配置，返回错误/警告/冲突", {}),
-        ("tool_reload_scheduler", "使调度缓存失效并返回状态", {}),
+        (
+            "tool_validate_configuration",
+            "全量校验当前配置：返回 errors（错误）/ warnings（警告）/ conflicts（规则冲突）。任一错误=配置不合法，"
+            "改动前先跑一次可确认配置是否健康。",
+            {},
+        ),
+        (
+            "tool_reload_scheduler",
+            "使调度缓存失效并返回最新状态。用于改动后强制刷新运行时缓存。",
+            {},
+        ),
         (
             "tool_preview_configuration_change",
-            "预览一批配置更改（校验但不写入）",
+            "预览一批配置更改（校验但不写入）。ops 为操作列表，每项的 action 枚举（完整）："
+            "create_schedule_rule / update_schedule_rule / delete_schedule_rule / "
+            "create_model_group / update_model_group / delete_model_group / "
+            "create_lifecycle / update_lifecycle / delete_lifecycle；字段：data（对应规则/组/生命周期字典）、"
+            "rule_id（更新/删除规则时用）、group_id（更新/删除组时用）、lifecycle_id（更新/删除生命周期时用）。"
+            "预览通过后须 apply 才真正写入。",
             {
                 "ops": {
                     "type": "array",
                     "description": (
-                        '操作列表，每项：{action: "create_schedule_rule"|'
-                        '"update_schedule_rule"|"delete_schedule_rule"|"create_model_group"|'
-                        '"update_model_group"|"delete_model_group"|"create_lifecycle"|'
-                        '"update_lifecycle"|"delete_lifecycle", '
+                        '操作列表，每项：{action: "create_schedule_rule"|"update_schedule_rule"|'
+                        '"delete_schedule_rule"|"create_model_group"|"update_model_group"|'
+                        '"delete_model_group"|"create_lifecycle"|"update_lifecycle"|"delete_lifecycle", '
                         "data: 规则/组/生命周期字典, rule_id?, group_id?, lifecycle_id?}"
                     ),
                 }
             },
         ),
-        ("tool_apply_configuration_change", "应用待执行的配置更改", {}),
-        ("tool_rollback_configuration_change", "回滚到应用前的配置", {}),
+        (
+            "tool_apply_configuration_change",
+            "应用待执行的配置更改（把 preview 暂存的更改真正写入库）。preview 之后、确认无误时调用。",
+            {},
+        ),
+        (
+            "tool_rollback_configuration_change",
+            "回滚到应用前的配置快照。用于撤销刚 apply 的更改。",
+            {},
+        ),
         # ---- v0.1.6：生命周期（含多阶段降级 / 周期校准 / 全局默认） ----
         (
             "tool_list_lifecycles",
-            "列出全部生命周期策略（含 id/name/enabled/模式概要）",
+            "查询全部生命周期策略。返回值每项含：id（生命周期 id）、name、enabled、模式概要"
+            "（stages 段数量 / final_group / 是否周期校准）。用于确认现状与生命周期 id。",
             {},
         ),
         (
             "tool_get_lifecycle",
-            "按 id 或名称查询生命周期详情",
+            "按 id 或名称查询单个生命周期详情（含完整 stages / final_group / periodic / calibration 字段）。"
+            "未精确命中时返回 candidates。",
             {"name": "生命周期 id 或名称"},
         ),
         (
             "tool_create_lifecycle",
-            "创建生命周期（多阶段降级 / 周期校准）",
+            "创建生命周期：按会话轮数多阶段降级 / 周期校准 / 上下文压缩校准。spec 字段："
+            "name（名称）、enabled（是否启用）、stages=[{group_id: 已存在组 id, rounds: 正整数}]（按累计轮次逐段切换），"
+            "final_group（stages 全部耗尽后使用的主组 id，可为空串）、periodic_group（周期校准组 id，可为空串）+ "
+            "periodic_interval（正整数，第 N 的整数倍轮固定用 periodic_group 校准一次）、"
+            'calibration_event（"" 或 "context_compression"）+ calibration_group + calibration_rounds（校准持续轮数）。'
+            "scope / priority 约束同时间调度规则。所有 group_id 须先查询确认存在。",
             {
                 "spec": {
                     "type": "object",
@@ -270,14 +395,15 @@ def build_config_toolset(tc: ToolContext) -> ToolSet:
                         "periodic_interval: 正整数, "
                         'calibration_event: ""|"context_compression", '
                         "calibration_group: 校准组 id（calibration_event 非空时必填）, "
-                        "calibration_rounds: 正整数（calibration_event 非空时必填）}"
+                        "calibration_rounds: 正整数（calibration_event 非空时必填）, "
+                        'scope: {"groups": [], "users": [], "sessions": []}}'
                     ),
                 }
             },
         ),
         (
             "tool_update_lifecycle",
-            "合并更新生命周期",
+            "合并更新生命周期。lifecycle_id 为目标生命周期 id；spec 结构同 create_lifecycle，只写需要改的键。",
             {
                 "lifecycle_id": "生命周期 id",
                 "spec": {
@@ -288,12 +414,12 @@ def build_config_toolset(tc: ToolContext) -> ToolSet:
         ),
         (
             "tool_delete_lifecycle",
-            "删除生命周期（高危，需预览）",
+            "删除生命周期（高危，若 agent_confirm 开启需先 preview 再 apply）。lifecycle_id 为目标生命周期 id。",
             {"lifecycle_id": "生命周期 id"},
         ),
         (
             "tool_set_default_lifecycle",
-            "设置全局默认生命周期（全局启用某生命周期 / 降级预设；传空串清除）",
+            "设置全局默认生命周期（全局启用某生命周期 / 降级预设）。lifecycle_id 传空串=清除全局默认。",
             {"lifecycle_id": "生命周期 id 或空串（空串=清除全局默认）"},
         ),
     ]
@@ -359,7 +485,10 @@ class ModelMorphConfigAgentTool(FunctionTool[AstrAgentContext]):
     name: str = "model_scheduler_config"
     description: str = (
         "当管理员要求修改模型调度配置时使用，例如：'晚上换个便宜模型'、'高峰期别用某模型'、"
-        "创建/修改/删除时间调度规则或模型组。把管理员的需求原话作为 query 传入。"
+        "创建/修改/删除时间调度规则或模型组、按会话轮数降级。把管理员的需求原话作为 query 传入。"
+        "模型会先判断需求属于时间调度规则（temporal）、生命周期（lifecycle）还是查询，再调用"
+        "对应工具，避免调错/重复调用。涉及群号/QQ 时按 UMO 格式换算"
+        "（platform_id:GroupMessage:群号 / platform_id:FriendMessage:QQ）。"
         "仅管理员可用，非管理员调用会被拒绝。"
     )
     parameters: dict = Field(
@@ -522,3 +651,158 @@ async def run_web_agent(context, tc: ToolContext, messages, chat_provider_id) ->
     except Exception as exc:  # noqa: BLE001 - 异常兜底
         logger.error("agent: run_web_agent 异常: %s", exc)
         return {"error": str(exc)}
+
+
+async def run_web_agent_stream(context, tc: ToolContext, messages, chat_provider_id):
+    """SSE 配置 Agent 流式生成器：产出统一的中文可序列化 dict 事件流。
+
+    镜像 ``Context.tool_loop_agent`` 的装配流程（``ToolLoopAgentRunner`` + streaming=True），
+    逐个消费 ``step_until_done(max_steps=30)`` 产出的 ``AgentResponse`` 帧并转成事件 dict。
+    每个事件 dict 由调用方（web/api.py）负责序列化为 SSE ``data: <json>\\n\\n``。
+
+    事件帧类型与字段（与 ``GET agent/chat/stream`` 的契约完全一致）：
+    - ``{"type": "meta", ...}``：由调用方注入（本生成器不产出）。
+    - ``{"type": "delta", "text": str}``：``streaming_delta`` 帧中正文 Plain 文本的*增量*。
+      多个 ``streaming_delta`` 帧可能重复携带**累计**文本（Provider 流式 chunk 常用累计法），
+      故按 deerflow runner 的 ``prev_text_for_streaming`` 模式：若新完整文本以已发文本为前缀，
+      只下发 ``新文本[len(已发):]`` 增量；否则整段下发。``reasoning``（chain type=="reasoning"）
+      帧的思考文本跳过、不与正文混流，避免思考过程污染回复。
+    - ``{"type": "tool", "name": str, "args": ...}``：工具调用提示帧。chain type=="tool_call"
+      时从 ``Json`` 组件取 ``name`` / ``args`` 下发，供前端显示「正在使用工具 xxx」；若取不到
+      跳过该帧，不影响 delta / done / error。
+    - ``{"type": "done", "reply": str}``：结束帧，含最终完整回复
+      （``runner.get_final_llm_resp().completion_text``）。
+    - ``{"type": "error", "message": str}``：异常兜底帧。任何异常（含 reset / step 失败）都
+      产出一帧 error 后结束，**绝不向调用方抛出**。
+
+    Args:
+        context: astrbot.core.star.context.Context 实例。
+        tc: ``ToolContext`` 实例（web 场景置 source=web_agent）。
+        messages: 对话历史，形如 ``[{"role", "content"}, ...]``。
+        chat_provider_id: 使用的聊天 Provider id。
+
+    Yields:
+        事件 dict（可 JSON 序列化）。
+    """
+    try:
+        tc.source = "web_agent"
+        tc.operator = "admin"
+        # 解析 Provider（与 tool_loop_agent / POST 流程一致；无该 Provider 视为整体失败）。
+        provider = await context.provider_manager.get_provider_by_id(chat_provider_id)
+        if provider is None:
+            yield {"type": "error", "message": "聊天 Provider 不可用"}
+            return
+
+        # 构造请求与运行上下文（镜像 Context.tool_loop_agent 的装配）。
+        request = ProviderRequest(
+            prompt=None,
+            image_urls=[],
+            audio_urls=[],
+            func_tool=build_config_toolset(tc),
+            contexts=[
+                Message(role=m.get("role", "user"), content=m.get("content", "")).model_dump()
+                for m in (messages or [])
+                if isinstance(m, dict)
+            ],
+            system_prompt=CONFIG_AGENT_SYSTEM_PROMPT,
+        )
+        event = _make_web_admin_event()
+        agent_context = AstrAgentContext(context=context, event=event)
+        agent_runner = ToolLoopAgentRunner()
+        tool_executor = FunctionToolExecutor()
+
+        # 镜像 tool_loop_agent：func_tool 含 astrbot_file_read_tool 时才设置溢出目录与读工具。
+        other_kwargs: dict = {}
+        if request.func_tool and request.func_tool.get_tool("astrbot_file_read_tool"):
+            other_kwargs.setdefault("tool_result_overflow_dir", get_astrbot_system_tmp_path())
+            other_kwargs.setdefault(
+                "read_tool", request.func_tool.get_tool("astrbot_file_read_tool")
+            )
+        await agent_runner.reset(
+            provider=provider,
+            request=request,
+            run_context=AgentContextWrapper(
+                context=agent_context, tool_call_timeout=120
+            ),
+            tool_executor=tool_executor,
+            agent_hooks=BaseAgentRunHooks[AstrAgentContext](),
+            streaming=True,
+            **other_kwargs,
+        )
+
+        # 逐帧消费，转成统一事件流。
+        prev_text = ""  # 已发正文累计文本（增量计算基准）
+        async for resp in agent_runner.step_until_done(max_steps=30):
+            rtype = getattr(resp, "type", "")
+            data = getattr(resp, "data", None) or {}
+            chain = data.get("chain") if isinstance(data, dict) else None
+            if rtype == "streaming_delta":
+                # 跳过 reasoning（思考过程），仅处理正文 Plain 增量。
+                if chain is not None and chain.type == "reasoning":
+                    continue
+                full_text = _extract_plain_text(chain)
+                if not full_text:
+                    continue
+                if full_text.startswith(prev_text):
+                    delta = full_text[len(prev_text) :]
+                else:
+                    delta = full_text if full_text != prev_text else ""
+                prev_text = full_text
+                if delta:
+                    yield {"type": "delta", "text": delta}
+            elif rtype == "tool_call" or (
+                chain is not None and chain.type == "tool_call"
+            ):
+                tool_info = _extract_tool_call(chain)
+                if tool_info:
+                    yield {
+                        "type": "tool",
+                        "name": tool_info.get("name", ""),
+                        "args": tool_info.get("args", {}),
+                    }
+                # 取不到 tool 信息时跳过该帧（不影响后续）。
+
+        # 结束：用 final llm resp 收尾。
+        llm_resp = agent_runner.get_final_llm_resp()
+        reply = (
+            (llm_resp.completion_text if llm_resp is not None else "")
+            or "（未产生回复）"
+        )
+        yield {"type": "done", "reply": reply}
+    except Exception as exc:  # noqa: BLE001 - 流式处理异常兜底，产出 error 帧结束
+        logger.error("agent: run_web_agent_stream 异常: %s", exc)
+        try:
+            yield {"type": "error", "message": str(exc)}
+        except Exception:  # noqa: BLE001 - 极端情况下游已断开，静默结束
+            logger.warning("agent: run_web_agent_stream 产出 error 帧失败（下游已断开）")
+
+
+def _extract_plain_text(chain) -> str:
+    """从 MessageChain 提取 Plain 组件的拼接文本；chain 为空或非链返回空串。"""
+    try:
+        if chain is None:
+            return ""
+        parts = []
+        for comp in chain.chain or []:
+            if isinstance(comp, Plain) and getattr(comp, "text", None):
+                parts.append(str(comp.text))
+        return "".join(parts)
+    except Exception:  # noqa: BLE001 - 组件解析失败视为无文本
+        return ""
+
+
+def _extract_tool_call(chain) -> dict | None:
+    """从 tool_call 类型的 MessageChain 提取 {name, args}；取不到返回 None。"""
+    try:
+        if chain is None:
+            return None
+        for comp in chain.chain or []:
+            if isinstance(comp, Json) and isinstance(comp.data, dict):
+                data = comp.data
+                name = data.get("name")
+                if name:
+                    args = data.get("args") or {}
+                    return {"name": str(name), "args": args}
+        return None
+    except Exception:  # noqa: BLE001 - 解析失败不产出 tool 帧
+        return None

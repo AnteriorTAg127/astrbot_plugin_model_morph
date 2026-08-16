@@ -6,8 +6,50 @@
 // 全部动态文本走 textContent / el()，防 XSS。
 // ==========================================================================
 import { bridge, t, el, showToast } from "../common.js";
-import { refData, refreshRefData } from "./shared.js";
+import { refData, refreshRefData, initUmoPlatformSelect, renderUmoPreview } from "./shared.js";
 import { consumePendingSim } from "./rules.js";
+
+const S_SIM = "pages.model-morph.simulator";
+
+// F2：在群 / 用户 / 会话输入下方注入平台下拉 + UMO 实时预览。
+// 模拟器输入在 index.html 静态声明，故在 bind()（仅执行一次）注入，避免重复。
+function injectUmoPreviews() {
+    const grid = document.querySelector("#page-simulator .form-grid");
+    if (!grid) return;
+    // 防重复注入（bind 只执行一次，双保险）
+    if (grid.querySelector(".umo-platform-field")) return;
+
+    const umoPlatSel = el("select", "input input-select");
+    const umoPlatField = el("div", "form-field umo-platform-field");
+    umoPlatField.appendChild(el("label", null, t(`${S_SIM}.umo_platform`, "平台")));
+    umoPlatField.appendChild(umoPlatSel);
+    grid.prepend(umoPlatField);
+
+    const refreshAll = [];
+    for (const pid of ["simGroup", "simUser", "simUmo"]) {
+        const input = document.getElementById(pid);
+        if (!input) continue;
+        const preview = el("div", "umo-preview");
+        input.parentNode.appendChild(preview);
+
+        const hint = t(`${S_SIM}.umo_preview_hint`, "输入群号/QQ 后显示 UMO 预览");
+        const sessionHint = t(`${S_SIM}.umo_session_hint`, "会话 UMO 将原样使用");
+        const refresh = () => {
+            const val = input.value.trim();
+            if (pid === "simGroup") {
+                renderUmoPreview(preview, { platformId: umoPlatSel.value, groupId: val, userId: "", sessionId: "", emptyHint: hint });
+            } else if (pid === "simUser") {
+                renderUmoPreview(preview, { platformId: umoPlatSel.value, groupId: "", userId: val, sessionId: "", emptyHint: hint });
+            } else {
+                renderUmoPreview(preview, { platformId: "", groupId: "", userId: "", sessionId: val, emptyHint: sessionHint });
+            }
+        };
+        input.addEventListener("input", refresh);
+        refreshAll.push(refresh);
+    }
+    umoPlatSel.addEventListener("change", () => refreshAll.forEach((fn) => fn()));
+    initUmoPlatformSelect(umoPlatSel).then(() => refreshAll.forEach((fn) => fn()));
+}
 
 function localDateTimeInput() {
     const d = new Date();
@@ -124,6 +166,8 @@ async function load() {
 
 function bind() {
     document.getElementById("simRun").addEventListener("click", run);
+    // F2：注入平台下拉 + 群/用户/会话 UMO 实时预览
+    injectUmoPreviews();
     // 首次进入时刷新下拉参考数据（providers/groups/lifecycles）
     refreshRefData();
     // 已在模拟器页时的下一次模拟请求（规则「模拟」按钮派发）
