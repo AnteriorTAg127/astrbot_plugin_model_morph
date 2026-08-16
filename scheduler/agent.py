@@ -657,7 +657,7 @@ async def run_web_agent_stream(context, tc: ToolContext, messages, chat_provider
     """SSE 配置 Agent 流式生成器：产出统一的中文可序列化 dict 事件流。
 
     镜像 ``Context.tool_loop_agent`` 的装配流程（``ToolLoopAgentRunner`` + streaming=True），
-    逐个消费 ``step_until_done(max_steps=30)`` 产出的 ``AgentResponse`` 帧并转成事件 dict。
+    逐个消费 ``step_until_done(max_step=30)`` 产出的 ``AgentResponse`` 帧并转成事件 dict。
     每个事件 dict 由调用方（web/api.py）负责序列化为 SSE ``data: <json>\\n\\n``。
 
     事件帧类型与字段（与 ``GET agent/chat/stream`` 的契约完全一致）：
@@ -732,7 +732,7 @@ async def run_web_agent_stream(context, tc: ToolContext, messages, chat_provider
 
         # 逐帧消费，转成统一事件流。
         prev_text = ""  # 已发正文累计文本（增量计算基准）
-        async for resp in agent_runner.step_until_done(max_steps=30):
+        async for resp in agent_runner.step_until_done(max_step=30):
             rtype = getattr(resp, "type", "")
             data = getattr(resp, "data", None) or {}
             chain = data.get("chain") if isinstance(data, dict) else None
