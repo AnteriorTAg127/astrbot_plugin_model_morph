@@ -731,7 +731,10 @@ async def run_web_agent_stream(context, tc: ToolContext, messages, chat_provider
         )
 
         # 逐帧消费，转成统一事件流。
-        prev_text = ""  # 已发正文累计文本（增量计算基准）
+        # prev_text：上一帧的完整正文（兼容「累计式」provider chunk，作增量基准）；
+        # acc_text：已下发正文的真实累计（done.reply 用它，保证多轮正文不丢失）。
+        prev_text = ""
+        acc_text = ""
         async for resp in agent_runner.step_until_done(max_step=30):
             rtype = getattr(resp, "type", "")
             data = getattr(resp, "data", None) or {}
@@ -749,6 +752,7 @@ async def run_web_agent_stream(context, tc: ToolContext, messages, chat_provider
                     delta = full_text if full_text != prev_text else ""
                 prev_text = full_text
                 if delta:
+                    acc_text += delta
                     yield {"type": "delta", "text": delta}
             elif rtype == "tool_call" or (
                 chain is not None and chain.type == "tool_call"
@@ -762,9 +766,10 @@ async def run_web_agent_stream(context, tc: ToolContext, messages, chat_provider
                     }
                 # 取不到 tool 信息时跳过该帧（不影响后续）。
 
-        # 结束：用 final llm resp 收尾。
+        # 结束：优先用流式累积正文（覆盖多轮工具调用前的解释文本，保证与前端
+        # 已渲染内容一致且会话持久化完整）；无正文时回退 final llm resp。
         llm_resp = agent_runner.get_final_llm_resp()
-        reply = (
+        reply = acc_text or (
             (llm_resp.completion_text if llm_resp is not None else "")
             or "（未产生回复）"
         )

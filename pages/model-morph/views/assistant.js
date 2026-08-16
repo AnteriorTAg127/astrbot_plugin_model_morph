@@ -463,6 +463,12 @@ async function postNonStreaming(body, text) {
 
 // ========== SSE 流式路径（agent/chat/stream） ==========
 // 帧分发：meta（会话元信息）→ delta（文本增量）→ tool（工具提示）→ done/finish（收尾）→ error。
+// 状态机要点（v1.0.2 修复）：
+// - 订阅后**等待流结束**（done/finish/error/断连）才返回，期间 busy 保持、输入框禁用，
+//   杜绝并发对话复用模块级 streamThrottle 单例导致的「跨轮文本串扰」；
+// - finish 帧放行（即使 done 已置 streamDone），保证 pending 预览卡不丢失；
+// - 最终渲染优先使用流式累积文本（覆盖模型在工具调用前输出的解释文本），
+//   与后端 done.reply（累积正文）保持一致。
 async function postStreaming(body, text) {
     // 1) 创建 assistant 气泡 + 「正在思考…」占位
     const payload = currentCid
@@ -479,16 +485,24 @@ async function postStreaming(body, text) {
 
     // 已累积的流式文本；tool 提示单独一个 span（不影响正文容器）
     let accText = "";
-    let streamDone = false;     // 防止结束后重复处理
+    let streamDone = false;      // 防止结束后重复处理
     let toolHintEl = null;
+    // 流结束信号：done / finish / error / 断连 时 resolve，postStreaming 等待它，
+    // 保证一轮流式对话期间 busy 保持（防止并发复用 streamThrottle 单例）。
+    let settleStream;
+    const streamFinished = new Promise((resolve) => { settleStream = resolve; });
 
-    const endStream = (() => {
+    // 无条件绑定当前气泡（重置上一轮可能残留的节流容器）。
+    startStreamBubble(msg);
+
+    const endStream = () => {
         resetStreamThrottle();
         streamDone = true;
         // 清理 tool 提示
         if (toolHintEl) { toolHintEl.remove(); toolHintEl = null; }
         body.scrollTop = body.scrollHeight;
-    });
+        settleStream();
+    };
 
     const showToolHint = (name) => {
         const label = t(`${S}.tool_using`, "正在使用工具 …");
@@ -506,31 +520,26 @@ async function postStreaming(body, text) {
     const handleDelta = (d) => {
         if (streamDone) return;
         const piece = (d && typeof d.text === "string") ? d.text : "";
+        if (!piece) return;
         accText += piece;
         clearThinking();
-        // 先挂载节流容器（首次 delta 时创建 md 渲染容器）
-        if (!streamThrottle.container) startStreamBubble(msg);
-        // 只有容器指向当前气泡才累积渲染
+        // 确保节流容器始终指向当前气泡（防御跨轮残留）。
+        if (streamThrottle.container !== msg) startStreamBubble(msg);
         streamThrottle.pendingText = accText;
         scheduleStreamRender();
     };
 
+    // 收尾：最终一致性渲染（不动 pending，pending 由 onMessage 的 done/finish 分支管理）。
     const handleEnd = async (data) => {
         endStream();
         clearThinking();
-        // done 帧：用 data.reply 全量重渲染一次，保证与持久化一致
-        const reply = (data && typeof data.reply === "string") ? data.reply : accText;
-        if (!streamThrottle.container) startStreamBubble(msg);
-        msg.replaceChildren(renderMarkdown(reply || accText));
-        streamThrottle.textCurrent = reply || "";
-        // pending
-        if (data && data.pending && pendingOpsList(data.pending).length > 0) {
-            pending = data.pending;
-            appliedPending = null;
-        } else {
-            pending = null;
+        // 优先流式累积文本（覆盖工具调用前的解释文本），与后端 done.reply 保持一致。
+        const reply = (data && typeof data.reply === "string") ? data.reply : "";
+        const finalText = accText || reply;
+        if (finalText) {
+            msg.replaceChildren(renderMarkdown(finalText));
+            streamThrottle.textCurrent = finalText;
         }
-        renderPending();
         await loadSidebar();
     };
 
@@ -544,10 +553,11 @@ async function postStreaming(body, text) {
 
     const handlers = {
         onMessage(msgEvt) {
-            if (streamDone) return;
             const data = msgEvt && msgEvt.parsed;
             if (!data || typeof data !== "object") return;
             const type = data.type;
+            // finish 帧放行（即使 done 已置 streamDone），保证 pending 预览卡不丢失。
+            if (streamDone && type !== "finish") return;
             if (type === "meta") {
                 if (data.conversation_id) currentCid = data.conversation_id;
             } else if (type === "delta") {
@@ -558,13 +568,8 @@ async function postStreaming(body, text) {
                 }
             } else if (type === "done") {
                 if (data && data.conversation_id) currentCid = data.conversation_id;
-                const pendingData = data && data.pending;
-                if (pendingData && pendingOpsList(pendingData).length > 0) {
-                    pending = pendingData;
-                    appliedPending = null;
-                } else {
-                    pending = null;
-                }
+                // done 帧无 pending（真正 pending 在 finish 帧），先清空避免残留旧预览。
+                pending = null;
                 renderPending();
                 handleEnd(data).then(() => {});
             } else if (type === "finish") {
@@ -572,6 +577,8 @@ async function postStreaming(body, text) {
                 if (data && data.pending && pendingOpsList(data.pending).length > 0) {
                     pending = data.pending;
                     appliedPending = null;
+                } else {
+                    pending = null;
                 }
                 renderPending();
                 handleEnd(data).then(() => {});
@@ -587,6 +594,8 @@ async function postStreaming(body, text) {
 
     try {
         await bridge.subscribeSSE("agent/chat/stream", handlers, payload);
+        // 等待流真正结束（done/finish/error/断连），期间保持 busy。
+        await streamFinished;
     } catch (e) {
         // subscribeSSE reject：回退到非流式 POST（原样可用）
         if (streamDone) return;
