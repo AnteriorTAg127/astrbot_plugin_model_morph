@@ -38,7 +38,9 @@ class SessionState:
         stage: 生命周期阶段（NEW|INITIAL|MAIN|PERIODIC）。
         lifecycle_id: 会话当前绑定的生命周期策略 id。
         current_group_id / current_provider_id: 最近一次调度选中的组 / Provider。
-        lock_group_id / lock_provider_id: 手动锁定（非 None 表示已锁定，跳过自动规则）。
+        lock_group_id / lock_provider_id / lock_model: 手动锁定的组 / Provider / 模型名
+            （非 None 表示已锁定）。lock_provider_id + lock_model 同时非空表示「强锁模型」，
+            优先级最高；lock_group_id 单独非空表示旧版「锁组」。
         pending_reset: 标记会话待重置（检测到 /new、/reset 后由下一次调度消费）。
         last_switch_at: 最近一次切换的时间戳（time.time()）。
         last_rule_id / last_trace: 最近命中的规则 id 与决策轨迹。
@@ -58,6 +60,7 @@ class SessionState:
     current_provider_id: str | None = None
     lock_group_id: str | None = None  # 手动锁定（None=未锁）
     lock_provider_id: str | None = None
+    lock_model: str | None = None  # 强锁模型名（配合 lock_provider_id，v1.0.3 新增）
     pending_reset: bool = False
     last_switch_at: float = 0.0
     last_rule_id: str | None = None
@@ -82,6 +85,7 @@ class SessionState:
             "current_provider_id": self.current_provider_id,
             "lock_group_id": self.lock_group_id,
             "lock_provider_id": self.lock_provider_id,
+            "lock_model": self.lock_model,
             "pending_reset": self.pending_reset,
             "last_switch_at": self.last_switch_at,
             "last_rule_id": self.last_rule_id,
@@ -119,6 +123,7 @@ class SessionState:
             current_provider_id=d.get("current_provider_id"),
             lock_group_id=d.get("lock_group_id"),
             lock_provider_id=d.get("lock_provider_id"),
+            lock_model=d.get("lock_model"),
             pending_reset=bool(d.get("pending_reset", False)),
             last_switch_at=float(d.get("last_switch_at", 0.0) or 0.0),
             last_rule_id=d.get("last_rule_id"),
@@ -209,7 +214,7 @@ class SessionStateStore:
         - ``group_cursor={}``、``last_rule_id=None``、``last_trace=None``；
         - 校准阶段三字段清空（``calibration_rounds_left=0``、``calibration_group_id=None``、
           ``calibration_reason=""``）；
-        - ``lock_group_id`` / ``lock_provider_id`` 保留（手动锁跨重置保留）。
+        - ``lock_group_id`` / ``lock_provider_id`` / ``lock_model`` 保留（手动锁跨重置保留）。
 
         Args:
             umo: 会话唯一标识。
@@ -235,7 +240,7 @@ class SessionStateStore:
             state.calibration_rounds_left = 0
             state.calibration_group_id = None
             state.calibration_reason = ""
-            # lock_group_id / lock_provider_id 保留
+            # lock_group_id / lock_provider_id / lock_model 保留（手动锁跨重置保留）
             self._notify(state)
             return copy.deepcopy(state)
 

@@ -26,7 +26,13 @@ from .persistence import ConfigStore
 logger = logging.getLogger("astrbot_plugin_model_morph")
 
 # 规则动作的合法取值（供前端下拉与 contract 校验）。
-ACTIONS = ("switch_group", "switch_provider", "apply_lifecycle", "unlock")
+ACTIONS = (
+    "switch_group",
+    "switch_provider",
+    "apply_lifecycle",
+    "unlock",
+    "replace_model",
+)
 
 # 条件类型集合（用于校验 / 快速分派）。
 _COND_TYPES = (
@@ -40,6 +46,7 @@ _COND_TYPES = (
     "round_gte",
     "context_length_gte",
     "lifecycle_event",
+    "model_keyword",
 )
 
 # 时间 "HH:MM" 正则。
@@ -67,6 +74,7 @@ class RuleContext:
     round: int = 0
     context_length: int = 0
     lifecycle_event: str = ""  # "" | "new" | "reset"
+    model_name: str = ""  # 名义请求模型名（engine 在评估前填入；空=无法确定）
 
 
 @dataclass
@@ -147,17 +155,117 @@ def normalize_rule(raw: dict) -> dict:
         when = {"op": "and", "conditions": []}
     rule["when"] = when
 
-    # then：action 与 group_id 默认
+    # then：action 与 group_id 默认；replace_model 动作另补 provider_id/model。
+    # 保持向后兼容：仅当动作是 replace_model 时使用新默认结构，其余沿用 switch_group 默认。
     raw_then = rule.get("then")
     if isinstance(raw_then, dict):
         then = copy.deepcopy(raw_then)
-        then.setdefault("action", "switch_group")
-        then.setdefault("group_id", "")
+        if then.get("action") == "replace_model":
+            then.setdefault("provider_id", "")
+            then.setdefault("model", "")
+        else:
+            then.setdefault("action", "switch_group")
+            then.setdefault("group_id", "")
     else:
         then = {"action": "switch_group", "group_id": ""}
     rule["then"] = then
 
     return rule
+
+
+def validate_rule(rule: dict) -> list[str]:
+    """校验一条规则的结构，返回错误信息列表（空 = 合法）。
+
+    覆盖 when 条件（含新增 ``model_keyword``）、then 动作（含新增
+    ``replace_model``）与 scope/优先级 的基础校验；供契约 C9（Agent-T 的
+    规则 CRUD 工具）调用。本函数聚焦新增类型与本模块核心结构，不重复实现
+    逐条件求值逻辑。
+
+    Args:
+        rule: 待校验的规则 dict。
+
+    Returns:
+        错误信息列表；为空表示规则合法。
+    """
+    errors: list[str] = []
+    rule = rule or {}
+    name = rule.get("name", "") or rule.get("id", "") or "规则"
+
+    # ---- then 动作 ----
+    then = rule.get("then")
+    action = then.get("action") if isinstance(then, dict) else None
+    if action not in ACTIONS:
+        errors.append(f"{name}: then.action {action!r} 非法（须∈{list(ACTIONS)}）")
+    elif action == "replace_model":
+        provider_id = (then.get("provider_id") or "").strip()
+        model = then.get("model")
+        if not provider_id:
+            errors.append(f"{name}: replace_model 的 provider_id 不能为空")
+        if not isinstance(model, str) or not model.strip():
+            errors.append(f"{name}: replace_model 的 model 必须为非空字符串")
+
+    # ---- 动作必需参数（非 replace_model 的常见必填，最小校验）----
+    elif action == "switch_group":
+        if not (then.get("group_id") or "").strip():
+            errors.append(f"{name}: switch_group 的 group_id 不能为空")
+
+    # ---- 优先级 ----
+    priority = rule.get("priority")
+    if priority is not None and not isinstance(priority, int):
+        errors.append(f"{name}: priority 须为整数")
+
+    # ---- when 条件 ----
+    when = rule.get("when")
+    conditions = when.get("conditions") if isinstance(when, dict) else None
+    if not isinstance(conditions, list):
+        errors.append(f"{name}: when.conditions 须为列表")
+        return errors
+
+    for idx, cond in enumerate(conditions):
+        if not isinstance(cond, dict):
+            errors.append(f"{name}: when.conditions[{idx}] 须为对象")
+            continue
+        ctype = cond.get("type")
+        if ctype not in _COND_TYPES:
+            errors.append(f"{name}: when.conditions[{idx}] 条件类型 {ctype!r} 非法")
+            continue
+        if ctype != "model_keyword":
+            continue  # 其余条件类型沿用引擎求值（未知/结构)不在此重复校验
+
+        # ---- model_keyword 专门校验 ----
+        keywords = cond.get("keywords")
+        kw_list = keywords if isinstance(keywords, list) else None
+        if kw_list is None or len(kw_list) == 0:
+            errors.append(
+                f"{name}: when.conditions[{idx}] model_keyword 的 keywords 须为非空列表"
+            )
+        else:
+            for k in kw_list:
+                if not isinstance(k, str) or not k.strip():
+                    errors.append(
+                        f"{name}: when.conditions[{idx}] model_keyword 的 keywords 每项须为非空字符串"
+                    )
+                    break
+
+        mode = cond.get("mode", "any")
+        if mode not in ("all", "any", "min_n"):
+            errors.append(
+                f"{name}: when.conditions[{idx}] model_keyword 的 mode={mode!r} 非法（须为 all|any|min_n）"
+            )
+        else:
+            # min_n：缺省补默认 2，1 ≤ min_n ≤ len(keywords)
+            min_n = cond.get("min_n", 2)
+            if not isinstance(min_n, int):
+                errors.append(
+                    f"{name}: when.conditions[{idx}] model_keyword 的 min_n 须为整数"
+                )
+            elif kw_list and not (1 <= min_n <= len(kw_list)):
+                errors.append(
+                    f"{name}: when.conditions[{idx}] model_keyword 的 min_n={min_n} 越界"
+                    f"（须 1≤min_n≤len(keywords)={len(kw_list)}）"
+                )
+
+    return errors
 
 
 def _parse_hhmm(value) -> tuple[int, int] | None:
@@ -322,6 +430,48 @@ def _eval_keyword(cond: dict, ctx: RuleContext) -> ConditionResult:
     )
 
 
+def _eval_model_keyword(cond: dict, ctx: RuleContext) -> ConditionResult:
+    """model_keyword：判定名义请求模型名是否含指定关键词（子串、大小写不敏感）。
+
+    mode：
+    - ``all``：模型名同时包含**所有**关键词；
+    - ``any``：模型名包含**任一**关键词；
+    - ``min_n``：模型名包含的关键词数量 **≥ min_n**（默认 2）。
+
+    ``keywords`` 为空或 ``ctx.model_name`` 为空（无法确定模型名）→ 不命中并注明原因。
+    """
+    keywords = [kw for kw in _as_list(cond.get("keywords")) if isinstance(kw, str)]
+    if not keywords:
+        return ConditionResult(cond, False, "model_keyword ✗ 无关键词")
+    if not ctx.model_name:
+        return ConditionResult(cond, False, "model_keyword ✗ 无法确定模型名")
+
+    model = ctx.model_name.lower()
+    lower_kws = [kw.lower() for kw in keywords]
+    hit_count = sum(1 for kw in lower_kws if kw in model)
+    mode = cond.get("mode", "any")
+    min_n = _none_to(cond, "min_n", 2)
+
+    if mode not in ("all", "any", "min_n"):
+        return ConditionResult(
+            cond, False, f"model_keyword ✗ 非法 mode={mode!r}（须为 all|any|min_n）"
+        )
+    if mode == "all":
+        matched = hit_count == len(lower_kws)
+    elif mode == "min_n":
+        matched = hit_count >= min_n
+    else:  # any
+        matched = hit_count >= 1
+
+    mark = "✓" if matched else "✗"
+    return ConditionResult(
+        cond,
+        matched,
+        f"model_keyword {mark} 模式={mode} 模型名={ctx.model_name!r} "
+        f"关键词={keywords} 命中={hit_count}/{len(lower_kws)}",
+    )
+
+
 def _eval_command(cond: dict, ctx: RuleContext) -> ConditionResult:
     """command：message_str 去空白后单词边界前缀匹配任一命令。
 
@@ -428,6 +578,8 @@ def _eval_condition(cond: dict, ctx: RuleContext) -> ConditionResult:
         return _eval_context_length_gte(cond, ctx)
     if ctype == "lifecycle_event":
         return _eval_lifecycle_event(cond, ctx)
+    if ctype == "model_keyword":
+        return _eval_model_keyword(cond, ctx)
     return ConditionResult(cond, False, f"unknown 条件类型 {ctype!r}（未实现）")
 
 

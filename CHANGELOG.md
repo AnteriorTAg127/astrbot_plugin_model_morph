@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.3] - 2026-08
+
+### Added
+
+- **🔧 规则引擎 Agent 工具补全**：配置 Agent（Web AI 助手 + 聊天 SubAgent）新增 `list_rules` / `get_rule` / `create_rule` / `update_rule` / `delete_rule` / `toggle_rule` 六个工具，完整覆盖 when/then 条件规则的查询与写操作；工具描述与系统提示词补齐取值枚举（model_keyword 三模式、replace_model 结构）与暂存语义。
+- **🚦 写操作分级审批**：所有 Agent 写操作按风险分级——查询类与创建/启停类（模型组/时间规则/生命周期）自动执行（校验失败拒绝并说明原因）；删除、修改已有配置、批量写、规则引擎写操作进入**暂存区**（`pending.json`），生成 `pending_id` 与人性化 `summary`，回复管理员批准指令 `/scheduler approve <id>`（或 `/scheduler reject <id>` 放弃）；新增 `/scheduler pending` 查看暂存概览；全链路审计（stage / stale / approve / reject）。`agent_confirm` 配置项语义升级：开启（默认）高危写暂存审批，关闭则直接执行（仍记审计）。
+- **🔑 关键词替换（模型名）**：规则引擎新增条件类型 `model_keyword`（`keywords` + `mode`：`all` 全包含 / `any` 任一 / `min_n` 至少 N 个，`min_n` 默认 2，子串匹配、大小写不敏感，匹配本次实际请求的模型名）与动作类型 `replace_model`（`provider_id` + `model`，强制替换最终请求的模型名，不改组/不改会话偏好/不清上下文）；新决策优先级全序：**锁模型 > 关键词替换 > 锁组 > 规则 > 校准 > 生命周期 > 默认 > base_group > temporal**。
+- **🔒 强制锁模型指令**：`/scheduler lockmodel <provider_id> <model>`（管理员）将会话强制锁定到指定 Provider 的指定模型名，优先级最高（覆盖规则/关键词替换/temporal）；Sessions 页锁定列显示「模型(provider @ model)」与「组(组名)」两态，Dashboard 显示当前生效强锁摘要；`unlock` 同步解除。
+- **👀 AI 变更审批人性化**：暂存与预览的变更以 human-readable `summary` 呈现（类型徽标 + 对象 + 关键参数 + 影响范围），审批卡与 AI 助手流式回复不再直接展示 ops JSON；提供「批准」「拒绝」按钮与「展开查看原始数据」折叠区；Web 审批端点 `POST agent/approve` / `agent/reject` 与聊天指令双入口。
+- **📚 README 精简**：历史版本介绍折叠为文末一段「版本历史」，详细更新日志统一归入本文件。
+- 测试：新增 6 个测试文件（规则关键词 24 / 状态锁模型 8 / 引擎优先级 18 / 工具分级 25 / 指令 21 / Web 端点 17），更新既有工具/提示词断言；全量 **499+ 个离线用例通过**，ruff 全绿；加载器路径导入验证通过。
+
+### Changed
+
+- `PendingChangeStore.stage()` 条目增加 `summary`（人读变更描述）与 `staged_at`；旧 preview 调用兼容。
+- `SessionState` 新增 `lock_model` 字段（旧快照自动容错为 None，跨 reset 保留）。
+- AI 助手流式 `done` 帧 / `GET agent/pending` 的 pending 结构扩展为 `{pending_id, summary[], staged_at, ...}`（旧 preview 字段保留兼容）。
+- 原有高危写工具（删除/修改模型组、时间规则、生命周期）由「preview→apply」改为「暂存→管理员批准」；`preview/apply/rollback_configuration_change` 工具保留兼容旧 Web 流程。
+
 ## [1.0.2] - 2026-08
 
 ### Added

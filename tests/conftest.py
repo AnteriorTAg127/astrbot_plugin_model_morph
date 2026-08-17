@@ -35,6 +35,8 @@ class FakeAdapter:
     - ``local``: ``is_local`` 返回值；设为 False 测试第三方 runner 跳过。
     - ``fail_on``: 一个属性名，访问/调用时抛异常（异常兜底测试）。
     - ``now_dt``: ``now()`` 返回的 datetime（可切换）。
+    - ``models``: ``provider_id -> model_name`` 映射；``provider_model_name(provider_id)``
+      返回该映射值，缺省 ""（可切换 / 测试名义模型名解析）。
     """
 
     def __init__(
@@ -55,6 +57,7 @@ class FakeAdapter:
         self.tz = ZoneInfo(tz_name)
         self.now_dt = datetime(2026, 6, 10, 14, 0, tzinfo=self.tz)
         self.fail_on = None  # 命中的调用点（method 名）抛异常
+        self.models: dict = {}  # provider_id -> model_name（名义模型名解析用）
 
     def _maybe_fail(self, method):
         if self.fail_on and method in self.fail_on:
@@ -95,6 +98,11 @@ class FakeAdapter:
     def current_provider_id(self, umo):
         self._maybe_fail("current_provider_id")
         return self._current
+
+    def provider_model_name(self, provider_id):
+        """返回指定 Provider 的默认模型名；无映射时返回 ""（引擎用 getattr 兜底）。"""
+        self._maybe_fail("provider_model_name")
+        return str(self.models.get(provider_id, ""))
 
     def now(self):
         self._maybe_fail("now")

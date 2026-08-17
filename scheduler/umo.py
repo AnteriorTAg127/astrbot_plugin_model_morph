@@ -94,9 +94,7 @@ def umo_examples(platform_id: str) -> dict:
     }
 
 
-def umo_from_ids(
-    platform_id: str, group_id: str = "", user_id: str = ""
-) -> list[str]:
+def umo_from_ids(platform_id: str, group_id: str = "", user_id: str = "") -> list[str]:
     """把群号 / QQ 号换算为对应 UMO 列表（去空项、保持顺序）。
 
     Args:

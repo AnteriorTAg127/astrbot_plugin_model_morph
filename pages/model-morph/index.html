@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Model Morph</title>
-    <link rel="stylesheet" href="./style.css?v=1.0.2">
+    <link rel="stylesheet" href="./style.css?v=1.0.3">
 </head>
 <body>
     <div class="app">
@@ -61,6 +61,7 @@
         <!-- ============ 总览页 ============ -->
         <section class="page active" id="page-dashboard">
             <div class="stats-grid" id="dashStats" aria-label="调度器状态"><div class="loading">加载中…</div></div>
+            <div id="dashForceLock" class="force-lock-banner" style="display:none;"></div>
             <div class="section-card">
                 <div class="section-title"><span data-i18n="pages.model-morph.dashboard.active_temporal_title">当前生效时段规则</span></div>
                 <div id="dashTemporal"><div class="loading">加载中…</div></div>
@@ -490,6 +491,6 @@
     <!-- Toast -->
     <div id="toast" class="toast"></div>
 
-    <script type="module" src="./app.js?v=1.0.2"></script>
+    <script type="module" src="./app.js?v=1.0.3"></script>
 </body>
 </html>

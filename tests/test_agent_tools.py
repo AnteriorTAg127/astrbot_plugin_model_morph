@@ -4,7 +4,7 @@
 - 查询工具返回正确结构；
 - create/update/delete 模型组与 temporal 规则走 validate 各错误分支
   （非法时间 / 未知 provider / 未知组 / 自引用 / 环）；
-- 高危操作 require_preview 语义（agent_confirm True/False 两态）；
+- 高危操作分级审批 staged 语义（agent_confirm True=高危写暂存待批准 / False=直接执行）；
 - preview → apply 全流程（前置快照、op 顺序执行、审计 entry 齐全）；
 - rollback 恢复原配置；
 - 「自然语言等效序列」测试：按 spec §27 逐段构造真实工具调用序列并断言最终 config
@@ -483,7 +483,7 @@ def test_group_create_success_without_confirm_gate():
 
 
 def test_group_update_before_after():
-    tc, _, _ = _make_tc()
+    tc, _, _ = _make_tc(agent_confirm=False)
     _seed_group(tc)
     r = tool_update_model_group(
         tc,
@@ -644,15 +644,18 @@ def test_temporal_enable_disable():
 # ---- 高危 require_preview 语义 ----
 
 
-def test_delete_group_requires_preview_when_confirm():
+def test_delete_group_stages_when_confirm():
     tc, _, _ = _make_tc(agent_confirm=True)
     _seed_group(tc)
     r = tool_delete_model_group(tc, group_id="default-chat")
-    assert r["ok"] is False
-    assert r["require_preview"] is True
-    assert "preview_configuration_change" in r["error"]
-    # 未被删除
+    assert r["ok"] is True
+    assert r["status"] == "staged"
+    assert r["pending_id"].startswith("p_")
+    assert r["summary"]
+    # 仅暂存，未被删除
     assert tc.groups.get("default-chat") is not None
+    assert tc.pending.get() is not None
+    assert tc.pending.get()["ops"][0]["action"] == "delete_model_group"
 
 
 def test_delete_group_executes_when_no_confirm():
@@ -664,7 +667,7 @@ def test_delete_group_executes_when_no_confirm():
     assert tc.groups.get("default-chat") is None
 
 
-def test_delete_rule_requires_preview_when_confirm():
+def test_delete_rule_stages_when_confirm():
     tc, _, temporal = _make_tc(agent_confirm=True)
     rule = temporal.create(
         {
@@ -675,8 +678,9 @@ def test_delete_rule_requires_preview_when_confirm():
         }
     )
     r = tool_delete_schedule_rule(tc, rule_id=rule["id"])
-    assert r["ok"] is False and r["require_preview"] is True
-    assert temporal.get(rule["id"]) is not None
+    assert r["ok"] is True and r["status"] == "staged"
+    assert r["pending_id"].startswith("p_")
+    assert temporal.get(rule["id"]) is not None  # 仅暂存未删除
 
 
 def test_delete_rule_executes_when_no_confirm():
@@ -899,8 +903,8 @@ def test_nl_seq_deepseek_peak_avoid():
 
 
 def test_nl_seq_replace_deepseek_with_qwen():
-    """管理员原话：「把 default-chat 的 DeepSeek 换成 Qwen」→ update_model_group：组内成员替换。"""
-    tc, _, _ = _make_tc()
+    """管理员原话：「把 default-chat 的 DeepSeek 换成 Qwen」→ update_model_group：组内成员替换（confirm=False 直执）。"""
+    tc, _, _ = _make_tc(agent_confirm=False)
     _seed_group(
         tc,
         group_id="default-chat",
@@ -1159,7 +1163,7 @@ def test_lifecycle_create_calibration_ok():
 
 
 def test_lifecycle_update_ok():
-    tc, _, fs = _make_lifecycles_tc()
+    tc, _, fs = _make_lifecycles_tc(agent_confirm=False)
     _seed_groups_for_lifecycle(tc)
     created = tool_create_lifecycle(tc, spec=_lc_spec())["lifecycle"]
     r = tool_update_lifecycle(
@@ -1175,7 +1179,7 @@ def test_lifecycle_update_ok():
 
 
 def test_lifecycle_update_merge_preserves_fields():
-    tc, _, fs = _make_lifecycles_tc()
+    tc, _, fs = _make_lifecycles_tc(agent_confirm=False)
     _seed_groups_for_lifecycle(tc)
     created = tool_create_lifecycle(
         tc,
@@ -1208,15 +1212,16 @@ def test_lifecycle_update_rejects_bad_after_merge():
     assert r["ok"] is False and "final_group" in r["error"]
 
 
-def test_lifecycle_delete_requires_preview_when_confirm():
+def test_lifecycle_delete_stages_when_confirm():
     tc, _, fs = _make_lifecycles_tc(agent_confirm=True)
     _seed_groups_for_lifecycle(tc)
     created = tool_create_lifecycle(tc, spec=_lc_spec())["lifecycle"]
     r = tool_delete_lifecycle(tc, lifecycle_id=created["id"])
-    assert r["ok"] is False
-    assert r["require_preview"] is True
-    assert "preview_configuration_change" in r["error"]
-    # 未删除
+    assert r["ok"] is True
+    assert r["status"] == "staged"
+    assert r["pending_id"].startswith("p_")
+    assert r["summary"]
+    # 仅暂存，未删除
     assert fs.get(created["id"]) is not None
 
 

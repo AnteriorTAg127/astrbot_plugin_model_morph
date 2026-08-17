@@ -7,66 +7,16 @@
 ## 功能特性
 
 - **模型组（Model Group）**：引用 AstrBot 已配置的 Provider（不保存 API Key），组内支持 `priority` / `round_robin` / `weighted` / `random` / `fallback` 五种调度策略，成员可配置权重、优先级、最大使用次数、冷却时间、模型名覆盖与 fallback 降级。
-- **规则系统（Rule Engine）**：`WHEN … AND/OR … THEN …` 式规则，支持 10 种条件（时间范围/跨午夜/星期、日期、群/用户/会话/平台作用域 include+exclude、关键词、命令、@Bot、消息类型、轮数、上下文长度、生命周期事件）与 4 种动作（切换模型组/直选 Provider/应用生命周期/解锁），带优先级与完整决策轨迹。
+- **规则系统（Rule Engine）**：`WHEN … AND/OR … THEN …` 式规则，支持 **11 种条件**（时间范围/跨午夜/星期、日期、群/用户/会话/平台作用域 include+exclude、关键词、**模型名关键词**、命令、@Bot、消息类型、轮数、上下文长度、生命周期事件）与 **5 种动作**（切换模型组/直选 Provider/**模型名替换**/应用生命周期/解锁），带优先级与完整决策轨迹。
+- **🔧 LLM 可操作规则引擎 + 分级审批**：配置 Agent（Web AI 助手 / 聊天 SubAgent）可对话式完成全部配置（含规则引擎 CRUD）；写操作按风险分级——查询、创建、启停自动执行（校验失败拒绝），删除/修改/规则写进入**暂存区**，管理员 `/scheduler approve|reject` 确认后生效，全程审计。
+- **🔑 模型名关键词替换**：`model_keyword` 条件（模型名含指定关键词，all/any/至少 N 个三种模式）+ `replace_model` 动作（模型名含关键词时自动替换为目标 Provider 的指定模型），优先级仅次于强锁。
+- **🔒 强制锁模型**：`/scheduler lockmodel <provider> <model>` 把会话强制锁定到指定 Provider+模型名，优先级最高，覆盖规则/关键词替换/temporal；Sessions 页与 Dashboard 可见锁定详情。
 - **会话生命周期策略（Lifecycle Strategy）**：新会话自动降级——`Strong × 3 → Cheap → 每 5 轮 Medium`，状态机 NEW/INITIAL/MAIN/PERIODIC，`/new`、`/reset` 自动检测。
 - **会话隔离**：调度状态按 UMO（会话）完全隔离，多群/多用户并发互不污染；支持会话级手动锁定与恢复自动调度。
 - **可解释决策（DecisionTrace）**：每次切换都能回答「为什么是这个模型」——命中规则、被拒绝规则及每个条件的 ✓/✗ 与原因。
 - **WebUI（Plugin Page，8 个视图）**：Dashboard / 模型组 / 规则 / 生命周期 / 会话管理 / 调度日志 / **规则模拟器（Dry Run）** / 设置，支持中英双语与深色模式，无外部 CDN。
 - **调度日志**：时间/会话/规则/旧模型→新模型/轮数/原因，WebUI 可查。
 - **不干预原则**：未配置任何规则与默认模型组时，插件完全不动 AstrBot 原生行为；切换模型**从不**清空对话上下文。
-
-## v1.0.2 新特性
-
-> 当前版本 **v1.0.2**。
-
-- **💬 AI 助手流式输出（SSE）**：配置助手回复逐段增量渲染，不再一次性等待完整回复；期间显示「正在使用工具 xxx…」提示；文本超长或流式不可用时自动回退普通模式。会话持久化语义不变（用户消息先写、完整回复后写、错误不写半截）。
-- **📝 Markdown 渲染**：AI 助手气泡（历史 + 流式）支持标题/粗体/斜体/行内代码/围栏代码块/列表/引用/链接/表格/水平线；渲染器内置、无外部 CDN，白名单标签 + textContent 防 XSS；用户消息保持纯文本。
-- **🔤 UMO 理解补全**：配置 Agent 现在完全理解 UMO 格式（`platform_id:message_type:session_id`，如 `aiocqhttp:GroupMessage:群号` / `aiocqhttp:FriendMessage:QQ`）——你直接给出 UMO 会原样使用，给出群号/QQ 会自动换算。
-- **🧭 规则 vs 生命周期自动消歧**：说「晚上用便宜模型/高峰期别用某模型」→ 时间调度规则；说「前 N 轮用贵的、之后降级/校准」→ 生命周期；含糊的「调度」会先查询现状再向你确认，一句话只执行一次，不再重复创建。
-- **👁️ UMO 实时预览**：在时间规则 / 生命周期 / 配置向导的「限定群组」输入区与模拟器中输入群号或 QQ，下方实时显示它对应的 UMO 长什么样（平台可切换）。
-- **🔧 工具提示词全面完善**：所有工具的描述补齐取值枚举与参数语义（strategy 五策略、kind 二类型、schedule 四类型、scope 结构、生命周期字段等），模型参数错误率显著下降。
-
-## v1.0.0 — 首个正式版本
-
-> 以下为历史版本说明（v1.0.0 起）。
-
-v1.0.0 在 0.1.x 全部能力之上冻结为正式版，并包含最后一项关键修复：
-
-- **🌐 WebChat 模型切换修复（v0.1.10 并入）**：web 前端每条消息携带的 `selected_provider`（模型下拉选择存 localStorage）会覆盖 `/provider` 指令与插件写入的会话偏好，导致 web 下「插件自动切换」与「手动 /provider」均看似失效。插件现于 `on_waiting_llm_request` 把最终决策回灌到事件 extra，优先级为：**插件调度决策 > `/provider` 会话偏好 > web 前端下拉选择 > AstrBot 默认**；插件禁用（原生面板关闭）时完全不干预。
-- 其余机制保持 0.1.x 语义：决策优先级全序（锁定 > 规则 > 校准 > 生命周期 > 默认生命周期 > base_group > temporal 时段替换）、时间规则视图、冲突检测、配置校验、旧配置自动迁移、审计日志、配置助手会话持久化。
-
-## v0.1.5 新特性（历史版本）
-
-- **🤖 Agent 配置助手**：在聊天里直接对模型调度配置说人话（"晚上八点以后用便宜模型"、"DeepSeek 高峰期别用"……），配置 Agent 会通过结构化工具查询 → 规划 → 预览 → 执行 → 汇报；也可在 WebUI 的 **AI 助手** Tab 里用自然语言对话，配合 **预览 → 应用 → 撤销** 流程，高风险变更可随时回滚。
-- **⏱️ 时间强制替换**：新增 temporal 调度层，支持**按时间段把某模型替换为另一模型**（`model_override`）或**整组切换**（`group_switch`），运行时生效、时间结束自动恢复，**不改基础配置**；支持跨午夜、星期、指定日期、规则级时区与**优先级体系**（1000/500/200/100/0）。
-- **🧩 5 个预设**：峰谷模型切换、夜间省钱、工作日高性能、指定模型强制替换、临时维护切换，一键套用即生成规则。
-- **⚠️ 冲突检测**：对同时段/同组但去向不同的规则给出「同级并列 / 低者被遮蔽」提示，避免规则互相打架。
-- **📋 审计日志**：每一次配置变更（谁 / 何时 / 来源 / 动作 / 前后 / 结果）都记入 `audit.json`，可在 WebUI **审计** Tab 追溯。
-- **🔄 旧配置自动迁移**：旧版配置文件首次加载自动升级到 v2 schema（上线即生效，无需手动操作），`import_all` 同时兼容 v1/v2。
-
-## v0.1.6 新特性（历史版本）
-
-- **🪜 多阶段降级生命周期**：单个生命周期可用 `stages` 声明「前 N 轮 A → 随后 M 轮 B → 之后 C」的复合降级序列，`final_group` 为耗尽后的主组；`normalize_lifecycle` 自动剔除非法 stage。
-- **🔄 周期校准**：`periodic_group` + `periodic_interval` 让 staged 模式下每 N 轮固定用校准组跑一轮（优先级高于阶段定位），适合「每 15 个对话升级到 V4 Flash 校准一轮」这类需求。
-- **🧯 上下文压缩校准**：插件在 `on_llm_response` 采样 `usage.input`，以相对骤降启发式判定「上下文压缩」发生（AstrBot 本身不暴露压缩事件），随后按生命周期的 `calibration_event="context_compression"` + `calibration_group` + `calibration_rounds` 自动把会话切到校准组并计数 N 轮（新会话前 3 轮只建基线，不误判）。
-- **🌐 全局默认生命周期 `default_lifecycle`**：无锁会话直接按全局默认生命周期做降级；Agent 用 `set_default_lifecycle` 一键「全局启用某生命周期 / 降级预设」（空串清除）。
-- **🎛️ 配置助手指定模型 `agent_provider_id`**：可在后台指定配置助手（Web/SubAgent）使用的模型 Provider；留空则跟随默认聊天 Provider。
-- **⚖️ 决策优先级全序**：`会话锁定 > 命中规则动作 > 校准阶段 > 生命周期(periodic > stages/final > legacy) > default_lifecycle > base_group > 不干预`，最后叠加 temporal 时段替换。
-
-## v0.1.8 新特性（历史版本）
-
-- **💬 AI 配置助手会话持久化**：Web 助手的对话历史现在会保存到插件数据目录的 `agent_chats.json`（最多保留 **50 个会话** / 每会话最多 **200 条消息**，超出自动淘汰最旧；原子写入 + 损坏文件 `.bak` 备份兜底），刷新或重启 AstrBot 后即可直接找回历史会话。
-- **🗂️ 会话列表 / 切换 / 删除**：侧栏可查看会话概要（标题 / 时间 / 条数 / 预览），一键切换或删除会话；删除会写入审计日志。
-- **🔀 双流程兼容**：`agent/chat` 接口对旧前端保持向后兼容 —— `content` 新流程（自动/续接会话，成功后回写 assistant 消息）与旧 `messages` 一次性历史流程并存。
-
-## v0.1.9 新特性（历史版本）
-
-- **⏱️ 时间规则视图**：新增「时间规则」Tab，查看 / 编辑 / 启停 / 删除由配置向导、AI 配置助手或预设创建的 `model_override`（模型替换）与 `group_switch`（整组切换）时间规则，列表按类型语义化展示时间段（始终 / 每天 / 每周[周几] / 指定日期，跨午夜自动标注）。
-- **⚠️ 冲突横幅**：页面顶部实时展示 `priority_tie` / `shadowed` 两类规则冲突警示，避免规则在同一组同时段但去向不同时互相打架。
-
-## v0.1.10 新特性（历史版本）
-
-- **🌐 WebChat 模型切换修复**：web 前端每条消息携带的 `selected_provider` extra 会覆盖 `/provider` 指令与插件写入的 umo 会话偏好，导致 web 场景下切换“无效”。插件现于 `on_waiting_llm_request` 把调度决策（或 `/provider` 会话偏好）回灌到事件 extra：插件决策 > `/provider` 会话偏好 > web 前端下拉选择；插件禁用时不干预。详见 v1.0.0 条目。
 
 ## 安装
 
@@ -108,9 +58,11 @@ v1.0.0 在 0.1.x 全部能力之上冻结为正式版，并包含最后一项关
 
 ## 规则条件与动作
 
-**条件类型**：`time_range`（HH:MM 范围，支持跨午夜与星期过滤）、`date_weekday`（工作日/周末/具体星期/具体日期）、`scope`（群/用户/会话/平台，include+exclude）、`keyword`（包含/前缀）、`command`（命令边界前缀匹配）、`at_bot`、`message_type`（group/private）、`round_gte`（轮数 ≥）、`context_length_gte`（上下文估算 ≥）、`lifecycle_event`（new/reset）。组合方式：`AND` 或 `OR`（v0.1 单层组合）。
+**条件类型**：`time_range`（HH:MM 范围，支持跨午夜与星期过滤）、`date_weekday`（工作日/周末/具体星期/具体日期）、`scope`（群/用户/会话/平台，include+exclude）、`keyword`（包含/前缀）、`command`（命令边界前缀匹配）、`at_bot`、`message_type`（group/private）、`round_gte`（轮数 ≥）、`context_length_gte`（上下文估算 ≥）、`lifecycle_event`（new/reset）、`model_keyword`（**模型名关键词**：匹配本次实际请求的模型名是否含指定关键词，`mode` 支持 `all`（全包含）/ `any`（任一）/ `min_n`（至少 N 个），大小写不敏感）。组合方式：`AND` 或 `OR`（v0.1 单层组合）。
 
-**动作类型**：`switch_group`（切换模型组）、`switch_provider`（直选 Provider）、`apply_lifecycle`（绑定生命周期策略）、`unlock`（解除会话锁定）。
+**动作类型**：`switch_group`（切换模型组）、`switch_provider`（直选 Provider）、`apply_lifecycle`（绑定生命周期策略）、`unlock`（解除会话锁定）、`replace_model`（**模型名替换**：把最终请求的模型名强制替换为目标 Provider 的指定模型，不改组、不改会话偏好、不清上下文——常与 `model_keyword` 条件搭配实现「模型名含某关键词 → 自动换模型」）。
+
+**决策优先级（v1.0.3 全序）**：`强制锁模型（/scheduler lockmodel）` > `模型名关键词替换（model_keyword → replace_model）` > `会话锁组` > `命中规则动作` > `校准阶段` > `生命周期` > `default_lifecycle` > `base_group` > 不干预，最后叠加 temporal 时段替换。
 
 ## WebUI 使用说明
 
@@ -143,8 +95,20 @@ v1.0.0 在 0.1.x 全部能力之上冻结为正式版，并包含最后一项关
 | `/scheduler` / `/scheduler status` | 所有用户 | 当前会话调度状态（Provider/组/轮数/阶段/锁定/最近规则） |
 | `/scheduler model` | 所有用户 | 当前 Provider 与模型名 |
 | `/scheduler lock <组id或组名>` | 管理员 | 锁定本会话到指定模型组 |
-| `/scheduler unlock` | 管理员 | 解锁，恢复自动调度 |
+| `/scheduler lockmodel <provider_id> <model>` | 管理员 | **强制锁定**本会话到指定 Provider 的指定模型名（优先级最高，覆盖规则/关键词替换/temporal；模型名不含空格） |
+| `/scheduler unlock` | 管理员 | 解锁（同时解除组锁定与模型强锁），恢复自动调度 |
 | `/scheduler reset` | 管理员 | 重置本会话调度状态（轮数归零，不动对话上下文） |
+| `/scheduler pending` | 管理员 | 查看暂存区待审批的变更（id + 时间 + 摘要） |
+| `/scheduler approve [pending_id]` | 管理员 | 批准暂存区的配置变更（无参=应用当前唯一暂存） |
+| `/scheduler reject [pending_id]` | 管理员 | 拒绝/丢弃暂存区的配置变更 |
+
+> **分级审批**：AI 助手 / 聊天 SubAgent 的写操作按风险分级——查询、创建、启停类自动
+> 执行（校验失败会拒绝）；删除、修改已有配置、规则引擎写操作进入**暂存区**，等待管理员
+> 确认后生效，全程记审计。批准方式按使用场景区分：
+> - **聊天 SubAgent**：机器人会提示你在聊天中执行 `/scheduler approve <id>`（或
+>   `/scheduler reject <id>` 放弃、`/scheduler pending` 查看）；
+> - **Web AI 助手**：页面下方自动出现「待批准更改」卡片，显示变更摘要与
+>   **「✅ 批准 / 🛑 拒绝」按钮**——直接点击按钮即可，无需（也无法）在页面里执行指令。
 
 ## 配置说明
 
@@ -155,7 +119,7 @@ v1.0.0 在 0.1.x 全部能力之上冻结为正式版，并包含最后一项关
   - `audit.json`：审计日志持久化
   - `state.json`：会话运行时状态快照（每 300 秒 + 插件卸载时）
 - 时区：`timezone: auto` 跟随 AstrBot 全局配置时区；也可显式填写 IANA 时区名（如 `Asia/Shanghai`）。WebUI Dashboard 显示当前检测到的时区。
-- `agent_confirm`（默认开）：高危配置变更（删除模型组/规则、批量写操作）须先预览再应用；关闭后直接执行（仍记审计）。
+- `agent_confirm`（默认开）：**高危写操作（删除、修改已有配置、规则引擎写操作）进入暂存区等待管理员批准**（`/scheduler approve` / `reject`）；关闭后高危写直接执行（仍记审计）。查询、创建、启停类写操作始终自动执行（校验失败拒绝）。
 - `default_lifecycle`（默认空）：全局默认生命周期 id，无锁会话据此做多阶段降级；可用 Agent 工具 `set_default_lifecycle` 或 Settings 页设置，空串清除。
 - `agent_provider_id`（默认空）：配置助手（Web/SubAgent）使用的 Provider id；空则跟随默认聊天 Provider。
 - Debug 模式开启后，AstrBot 日志输出完整决策轨迹（规则评估、条件结果、状态变化）。
@@ -239,3 +203,20 @@ python -m pytest tests -q -p no:cacheprovider
 - 代码结构：`main.py`（Star 入口/钩子/命令）→ `scheduler/`（compat 兼容层 / persistence 持久化 / state 会话状态 / groups 模型组 / rules 规则 / lifecycle 生命周期 / temporal 时间调度 / audit 审计 / agents agent 配置层 / presets 预设 / engine 调度引擎 / logs 日志）→ `web/api.py`（Web API 路由，v0.1.5 新增 temporal/validate/runtime/presets/agent/audit）→ `pages/model-morph/`（前端 SPA）。
 - 设计文档与调研报告见 `开发/`（不提交 git）。
 - 运行时接入点：`@filter.on_waiting_llm_request`（Provider 解析前调用 `ProviderManager.set_provider(umo=...)`，与 `/provider` 同款会话隔离机制）；`/new` `/reset` 检测基于 `_clean_group_context_session` extra 标志 + conversation_id 变化双保险。
+
+## 版本历史
+
+Model Morph 自 v0.1 迭代至今：**v0.1.x（开发期）** 建立了调度核心——模型组（5 种组内策略）、
+when/then 规则引擎（10 种条件 + 4 种动作）、会话生命周期（多阶段降级 / 周期校准 / 上下文
+压缩校准）、temporal 时间强制调度、会话隔离与锁定、WebUI 8 视图、AI 配置助手（聊天
+SubAgent + Web 助手）、时间规则视图与冲突检测、审计日志、旧配置自动迁移、AI 助手会话
+持久化、WebChat 模型切换修复；**v1.0.0（首个正式版）** 冻结 0.1.x 全部能力并修复
+WebChat 下插件切换被前端 `selected_provider` 覆盖的问题；**v1.0.2** 聚焦 AI 助手体验
+升级——SSE 流式输出、内置 Markdown 渲染（无 CDN、防 XSS）、UMO 理解补全（群号/QQ →
+`platform_id:message_type:session_id` 换算）、规则 vs 生命周期自动消歧、前端 UMO 实时
+预览、工具描述取值枚举补全；**v1.0.3** 让 Agent 完整操作规则引擎（when/then 条件规则
+CRUD）、引入写操作分级审批（查询/创建/启停自动执行，删除/修改/规则 CRUD 入暂存区等待
+管理员 `/scheduler approve|reject` 批准）、新增模型名关键词条件 `model_keyword`
+（all/any/min_n）与 `replace_model` 动作、`/scheduler lockmodel` 强制锁模型（优先级
+最高）、AI 变更审批人性化展示（summary 替代 JSON），并精简 README、把详细更新日志
+统一归入 [CHANGELOG.md](./CHANGELOG.md)。

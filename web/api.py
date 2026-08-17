@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from datetime import datetime
 
@@ -28,6 +29,9 @@ from ..scheduler.presets import PRESETS, build_preset_rules
 from ..scheduler.rules import ACTIONS
 
 PLUGIN_NAME = "astrbot_plugin_model_morph"
+
+# SSE 后台任务的结束哨兵：推入事件队列后，``_agent_chat_stream_gen`` 读到即结束转发。
+_END = object()
 
 
 # ---------------------------------------------------------------------- #
@@ -204,6 +208,9 @@ def register_all(plugin):
 
     # ---- v0.1.5：Agent 配置层 / 审计 ----
     _register(plugin, "agent/pending", ["GET"], "待应用更改", _handler_agent_pending)
+    # ---- v1.0.3：分级审批端点（与 /scheduler approve|reject 共用 agent_tools 公开入口 C8）----
+    _register(plugin, "agent/approve", ["POST"], "批准暂存变更", _handler_agent_approve)
+    _register(plugin, "agent/reject", ["POST"], "拒绝暂存变更", _handler_agent_reject)
     _register(plugin, "agent/chat", ["POST"], "AI 配置助手对话", _handler_agent_chat)
     _register(
         plugin,
@@ -211,6 +218,14 @@ def register_all(plugin):
         ["GET"],
         "AI 配置助手流式对话（SSE）",
         _handler_agent_chat_stream,
+    )
+    # ---- v1.0.3：Agent 生成任务状态（前端「进入时校验」断连续跑）----
+    _register(
+        plugin,
+        "agent/task-status",
+        ["GET"],
+        "Agent 生成任务状态",
+        _handler_agent_task_status,
     )
     _register(plugin, "agent/apply", ["POST"], "应用 AI 助手更改", _handler_agent_apply)
     _register(
@@ -245,9 +260,29 @@ def register_all(plugin):
 
 
 async def _handler_dashboard(plugin):
-    """返回调度器概览数据。"""
+    """返回调度器概览数据；存在强锁模型会话时附加 ``force_lock`` 摘要（v1.0.3）。
+
+    ``force_lock`` 为 ``{"umo", "provider_id", "model"}``（多会话时附 ``count``），
+    前端兼容字符串 / 对象两种形态；无强锁会话时不含该字段。
+    """
     try:
-        return json_response(plugin.engine.dashboard())
+        data = dict(plugin.engine.dashboard())
+        strong: list[dict] = []
+        for st in await plugin.states.all_states():
+            if st.lock_provider_id and st.lock_model:
+                strong.append(
+                    {
+                        "umo": st.umo,
+                        "provider_id": st.lock_provider_id,
+                        "model": st.lock_model,
+                    }
+                )
+        if strong:
+            force_lock = dict(strong[0])
+            if len(strong) > 1:
+                force_lock["count"] = len(strong)
+            data["force_lock"] = force_lock
+        return json_response(data)
     except Exception as exc:  # noqa: BLE001
         logger.exception("web.dashboard 异常")
         return error_response(str(exc), status_code=500)
@@ -598,12 +633,18 @@ async def _handler_sessions_list(plugin):
             if st.lock_group_id:
                 lg = plugin.groups.get(st.lock_group_id)
                 lock_group_name = (lg.get("name", "") if lg else "") or st.lock_group_id
+            # v1.0.3：锁定展示标签（前端优先用 lock_label）：强锁模型 > 锁组 > 未锁。
+            lock_label = ""
+            if st.lock_provider_id and st.lock_model:
+                lock_label = f"模型({st.lock_provider_id} @ {st.lock_model})"
+            elif st.lock_group_id:
+                lock_label = f"组({lock_group_name})"
             calibration_group_name = ""
             if st.calibration_group_id:
                 cg = plugin.groups.get(st.calibration_group_id)
                 calibration_group_name = (
-                    (cg.get("name", "") if cg else "") or st.calibration_group_id
-                )
+                    cg.get("name", "") if cg else ""
+                ) or st.calibration_group_id
             rows.append(
                 {
                     "umo": st.umo,
@@ -620,10 +661,10 @@ async def _handler_sessions_list(plugin):
                     "last_rule_id": st.last_rule_id,
                     "lock_group_id": st.lock_group_id,
                     "lock_provider_id": st.lock_provider_id,
+                    "lock_model": st.lock_model,
+                    "lock_label": lock_label,
                     "lock_group_name": lock_group_name,
-                    "lock_provider_model": provider_names.get(
-                        st.lock_provider_id, ""
-                    )
+                    "lock_provider_model": provider_names.get(st.lock_provider_id, "")
                     or (st.lock_provider_id or ""),
                     "locked": bool(st.lock_group_id or st.lock_provider_id),
                     "pending_reset": st.pending_reset,
@@ -643,7 +684,15 @@ async def _handler_sessions_list(plugin):
 
 
 async def _handler_sessions_lock(plugin):
-    """锁定会话：body 须含 ``umo``；可指定 ``group_id`` 或 ``provider_id``。"""
+    """锁定会话：body 须含 ``umo``；支持三种锁定目标（v1.0.3 扩展强锁模型）。
+
+    - ``provider_id`` + ``model`` → 强锁模型（最高优先级）：写 ``lock_model`` 并清锁组，
+      审计 ``sessions/lock(model)``，返回含 ``lock_model`` / ``lock_label``；
+    - ``group_id`` → 锁组（旧逻辑，同时清 Provider / 模型锁定）；
+    - 仅有 ``provider_id``（无 model）→ 旧版「锁 Provider」（引擎按该 Provider 默认模型
+      调度），兼容旧字段组合；
+    - 三者皆无 → 400。
+    """
     try:
         payload = await _body()
         umo = _require(payload, "umo", str, "")
@@ -651,30 +700,54 @@ async def _handler_sessions_lock(plugin):
             return error_response("缺少 umo", status_code=400)
         group_id = _require(payload, "group_id", str, "")
         provider_id = _require(payload, "provider_id", str, "")
-        if not group_id and not provider_id:
-            return error_response(
-                "须指定 group_id 或 provider_id 之一", status_code=400
+        model = _require(payload, "model", str, "")
+        if provider_id and model:
+            await plugin.states.update(
+                umo,
+                lock_group_id=None,
+                lock_provider_id=provider_id,
+                lock_model=model,
             )
-        await plugin.states.update(
-            umo,
-            lock_group_id=(group_id or None),
-            lock_provider_id=(provider_id or None),
+            _audit(plugin, "sessions/lock(model)", umo)
+            return json_response(
+                {
+                    "locked": True,
+                    "umo": umo,
+                    "lock_model": model,
+                    "lock_label": f"模型({provider_id} @ {model})",
+                }
+            )
+        if group_id:
+            await plugin.states.update(
+                umo, lock_group_id=group_id, lock_provider_id=None, lock_model=None
+            )
+            _audit(plugin, "sessions/lock", umo)
+            return json_response({"locked": True, "umo": umo})
+        if provider_id:
+            # 旧版「锁 Provider」：兼容无 model 的旧请求，并清掉可能残留的强锁模型。
+            await plugin.states.update(
+                umo, lock_group_id=None, lock_provider_id=provider_id, lock_model=None
+            )
+            _audit(plugin, "sessions/lock", umo)
+            return json_response({"locked": True, "umo": umo})
+        return error_response(
+            "须指定 provider_id+model、group_id 或 provider_id 之一", status_code=400
         )
-        _audit(plugin, "sessions/lock", umo)
-        return json_response({"locked": True, "umo": umo})
     except Exception as exc:  # noqa: BLE001
         logger.exception("web.sessions/lock 异常")
         return error_response(str(exc), status_code=500)
 
 
 async def _handler_sessions_unlock(plugin):
-    """解锁会话：body 须含 ``umo``。"""
+    """解锁会话：body 须含 ``umo``；同时清除组 / Provider / 模型锁定。"""
     try:
         payload = await _body()
         umo = _require(payload, "umo", str, "")
         if not umo:
             return error_response("缺少 umo", status_code=400)
-        await plugin.states.update(umo, lock_group_id=None, lock_provider_id=None)
+        await plugin.states.update(
+            umo, lock_group_id=None, lock_provider_id=None, lock_model=None
+        )
         _audit(plugin, "sessions/unlock", umo)
         return json_response({"locked": False, "umo": umo})
     except Exception as exc:  # noqa: BLE001
@@ -1097,11 +1170,55 @@ async def _handler_presets_apply(plugin):
 
 
 async def _handler_agent_pending(plugin):
-    """返回当前待应用的更改（preview 生成、尚未 apply）。"""
+    """返回当前待应用的更改（v1.0.3：含 summary / staged_at 的扩展条目，无暂存返回 {}）。
+
+    经 ``agent_tools.pending_view``（契约 C8）读取，与 /scheduler pending 指令同源。
+    """
     try:
-        return json_response(plugin.tool_ctx.pending.get() or {})
+        return json_response(agent_tools.pending_view(plugin.tool_ctx) or {})
     except Exception as exc:  # noqa: BLE001
         logger.exception("web.agent/pending 异常")
+        return error_response(str(exc), status_code=500)
+
+
+async def _handler_agent_approve(plugin):
+    """批准暂存变更（v1.0.3）：body 可选 ``pending_id``（缺省=批准当前唯一暂存）。
+
+    与指令 ``/scheduler approve`` 共用 ``agent_tools.apply_staged``（契约 C8），
+    应用失败（ok:false）返回 400 错误；成功返回 ``{ok, applied, summary}``。
+    """
+    try:
+        payload = await _body()
+        pending_id = _require(payload, "pending_id", str, "")
+        plugin.tool_ctx.source = "web_agent"
+        plugin.tool_ctx.operator = "admin"
+        res = agent_tools.apply_staged(plugin.tool_ctx, pending_id)
+        if not res.get("ok"):
+            return error_response(res.get("error") or "批准失败", status_code=400)
+        return json_response(res)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("web.agent/approve 异常")
+        return error_response(str(exc), status_code=500)
+
+
+async def _handler_agent_reject(plugin):
+    """拒绝暂存变更（v1.0.3）：body 可选 ``pending_id``（缺省=拒绝当前唯一暂存）。
+
+    与指令 ``/scheduler reject`` 共用 ``agent_tools.reject_staged``（契约 C8）；
+    拒绝前先取 pending 的 summary（拒绝后条目即被清除），保证响应含人性化摘要。
+    """
+    try:
+        payload = await _body()
+        pending_id = _require(payload, "pending_id", str, "")
+        plugin.tool_ctx.source = "web_agent"
+        plugin.tool_ctx.operator = "admin"
+        summary = (agent_tools.pending_view(plugin.tool_ctx) or {}).get("summary") or []
+        res = agent_tools.reject_staged(plugin.tool_ctx, pending_id)
+        if not res.get("ok"):
+            return error_response(res.get("error") or "拒绝失败", status_code=400)
+        return json_response({**res, "summary": summary})
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("web.agent/reject 异常")
         return error_response(str(exc), status_code=500)
 
 
@@ -1237,6 +1354,12 @@ async def _handler_agent_chat_stream(plugin):
     返回 ``text/event-stream``，每个事件为 ``data: <json>\\n\\n``（前端 bridge 的
     SSE 解析依赖 ``data:`` 前缀）。事件帧顺序：``meta`` →（``delta``/``tool``）*
     → ``done``（后接 ``finish``）/ ``error``。
+
+    **断连续跑（v1.0.3）**：Agent 生成由独立的 ``asyncio.Task``（``_web_agent_task``）
+    在后台消费，SSE 生成器只经队列转发任务产出的事件帧，并记录任务状态
+    （``plugin._agent_task``，供 ``GET agent/task-status`` 读取）。当客户端切页 /
+    卸载 / 取消导致 SSE 断开时（生成器被取消），后台任务**不被取消**，继续跑完并把
+    完整回复写回 ChatStore，根治「切回后回复被吞」。
     """
     try:
         content = request.query.get("content", "") or ""
@@ -1254,10 +1377,27 @@ async def _handler_agent_chat_stream(plugin):
         pid = await _resolve_agent_provider(plugin)
         if not pid:
             return error_response("无可用聊天 Provider", status_code=400)
-        history = [{"role": m["role"], "content": m["content"]} for m in conv["messages"]]
+        history = [
+            {"role": m["role"], "content": m["content"]} for m in conv["messages"]
+        ]
+        # 事件队列：后台任务写入、SSE 生成器读取（解耦发送失败与生成失败）。
+        queue: asyncio.Queue = asyncio.Queue()
+        started_at = datetime.now().isoformat()
+        token = object()  # 唯一 token，任务结束时只清理属于自己的状态
+        # 后台生成任务：SSE 断开后仍自然跑完并写回 ChatStore。
+        task = asyncio.create_task(
+            _web_agent_task(plugin, pid, conv_id, history[-60:], queue, token)
+        )
+        # 记录任务状态（GET agent/task-status 读取），记录最近一个生成任务。
+        plugin._agent_task = {
+            "cid": conv_id,
+            "started_at": started_at,
+            "task": task,
+            "_token": token,
+        }
         # 只把最近 60 条发给 LLM（防 token 超限），与 POST 流程一致。
         return stream_response(
-            _agent_chat_stream_gen(plugin, pid, conv_id, title, history[-60:]),
+            _agent_chat_stream_gen(plugin, conv_id, title, queue, task),
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
     except Exception as exc:  # noqa: BLE001
@@ -1265,37 +1405,40 @@ async def _handler_agent_chat_stream(plugin):
         return error_response(str(exc), status_code=500)
 
 
-async def _agent_chat_stream_gen(plugin, pid: str, cid: str, title: str, history: list):
-    """SSE 事件生成器：meta → stream 事件 → done/finish 或 error。
+async def _web_agent_task(
+    plugin,
+    pid: str,
+    cid: str,
+    history: list,
+    queue: asyncio.Queue,
+    token: object,
+):
+    """后台 Agent 生成任务（SSE 断连续跑的核心）。
 
-    帧契约（与 ``scheduler.agent.run_web_agent_stream`` 产出的事件完全一致）：
-    - ``meta``：会话元信息（conversation_id / title），本生成器首先发出；
-    - ``delta`` / ``tool``：透传 stream 的增量文本与工具提示帧；
-    - ``done``：完整回复已产出，随后把 assistant 消息写回 ChatStore 并追发 ``finish``
-      （含 conversation_id 与待应用 pending，与 POST 流程返回的 pending 保持一致）；
-    - ``error``：流中出错，不写 assistant 消息（避免半截），直接结束。
+    消费 ``run_web_agent_stream`` 产出的事件帧并推入队列（由 SSE 生成器转发给客户端）；
+    当收到 ``done`` 帧时，在**本任务内**把完整回复写回 ChatStore 并追发 ``finish`` 帧
+    （含 conversation_id 与待应用 pending，与 POST 流程返回的 pending 保持一致）；
+    ``error`` 帧时不写半截 assistant，直接结束。
+
+    与 SSE 连接完全解耦：即便客户端中途断开，本任务也会自然跑完、写回 assistant 消息，
+    并在结束时清理状态（``plugin._agent_task``，仅当仍指向本任务）。任务内部吞掉一切
+    异常并按需产出 error 帧，**绝不向上抛出**，保证任务总能跑到清理分支。
     """
-    import json as _json
-
-    def _frame(ev: dict) -> str:
-        return f'data: {_json.dumps(ev, ensure_ascii=False)}\n\n'
-
-    yield _frame({"type": "meta", "conversation_id": cid, "title": title})
     try:
         async for ev in run_web_agent_stream(
             plugin.context, plugin.tool_ctx, history, pid
         ):
-            yield _frame(ev)
+            queue.put_nowait(ev)
             if ev.get("type") == "done":
                 # 完整回复已产出，写回 assistant 消息（与 POST 流程一致）。
                 try:
                     plugin.chats.append_message(cid, "assistant", ev.get("reply", ""))
-                except Exception:  # noqa: BLE001 - 写回失败不阻断流结束
+                except Exception:  # noqa: BLE001 - 写回失败不阻断任务结束
                     logger.warning(
                         "web.agent/chat/stream: 写回 assistant 消息失败", exc_info=True
                     )
                 _audit(plugin, "agent_chat", cid, detail="已保存会话消息（流式）")
-                yield _frame(
+                queue.put_nowait(
                     {
                         "type": "finish",
                         "conversation_id": cid,
@@ -1304,10 +1447,85 @@ async def _agent_chat_stream_gen(plugin, pid: str, cid: str, title: str, history
                 )
             elif ev.get("type") == "error":
                 # 出错：不写半截 assistant，直接结束。
-                return
-    except Exception as exc:  # noqa: BLE001 - 流生成异常兜底，产出 error 帧结束
-        logger.exception("web.agent/chat/stream 流生成异常")
-        yield _frame({"type": "error", "message": str(exc)})
+                queue.put_nowait(ev)
+    except Exception as exc:  # noqa: BLE001 - 任务异常兜底，产出 error 帧结束
+        logger.exception("web.agent/chat/stream 后台任务异常")
+        try:
+            queue.put_nowait({"type": "error", "message": str(exc)})
+        except Exception:  # noqa: BLE001 - 队列写入失败静默（下游已不可达）
+            pass
+    finally:
+        # 推入结束哨兵：SSE 生成器读到即结束转发（防止其永久 await queue.get()）。
+        queue.put_nowait(_END)
+        # 清理任务状态：仅当 plugin._agent_task 仍指向本任务时清空，避免误清新任务。
+        current = getattr(plugin, "_agent_task", None)
+        if current is not None and current.get("_token") is token:
+            plugin._agent_task = None
+
+
+async def _agent_chat_stream_gen(
+    plugin, cid: str, title: str, queue: asyncio.Queue, task: asyncio.Task
+):
+    """SSE 事件生成器：meta → 队列转发的 stream 事件 → 队列结束哨兵。
+
+    帧契约（与 ``scheduler.agent.run_web_agent_stream`` 产出的事件完全一致）：
+    - ``meta``：会话元信息（conversation_id / title），本生成器首先发出；
+    - ``delta`` / ``tool``：透传后台任务转发的增量文本与工具提示帧；
+    - ``done`` / ``finish``：后台任务在 ``done`` 时写回 assistant 并追发 ``finish``
+      （本生成器仅转发，不负责写回——写回在后台任务内，保证断连也不丢）；
+    - ``error``：流中出错（透传），直接结束。
+
+    客户端断开（Starlette 取消本生成器 → ``CancelledError`` / ``GeneratorExit``）时，
+    **不取消后台任务**，仅结束本转发器，让后台任务继续跑完并写回 ChatStore。
+    """
+    import json as _json
+
+    def _frame(ev: dict) -> str:
+        return f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+
+    yield _frame({"type": "meta", "conversation_id": cid, "title": title})
+    try:
+        while True:
+            ev = await queue.get()
+            if ev is _END:
+                break
+            yield _frame(ev)
+    except (GeneratorExit, asyncio.CancelledError):
+        # SSE 断开：后台任务继续跑完（不取消），本生成器就此结束转发。
+        if not task.done():
+            logger.info(
+                "web.agent/chat/stream: SSE 断开，Agent 生成任务继续后台跑完（cid=%s）",
+                cid,
+            )
+
+
+async def _handler_agent_task_status(plugin):
+    """Agent 生成任务状态（用于前端「进入时校验」断连续跑）。
+
+    读取 ``plugin._agent_task``（由 ``_handler_agent_chat_stream`` 写入、后台任务
+    结束时清理）：
+    - ``running=true``：有 Agent 生成任务正在后台续跑（含 SSE 断开后的断连续跑）；
+    - ``cid``：任务对应会话 id（前端提示「完成后可在该会话查看」）；无任务 null；
+    - ``started_at``：任务开始时间（ISO）；无任务 null。
+    无任务 / 异常时均返回 ``{"running": false, "cid": null, "started_at": null}``，
+    不报错。
+    """
+    try:
+        current = getattr(plugin, "_agent_task", None)
+        if not current:
+            return json_response({"running": False, "cid": None, "started_at": None})
+        task = current.get("task")
+        running = bool(task) and not task.done()
+        return json_response(
+            {
+                "running": running,
+                "cid": current.get("cid"),
+                "started_at": current.get("started_at"),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("web.agent/task-status 异常")
+        return error_response(str(exc), status_code=500)
 
 
 async def _handler_agent_conversations(plugin):

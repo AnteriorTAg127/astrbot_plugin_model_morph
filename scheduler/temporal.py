@@ -47,6 +47,7 @@ _DAY_MINUTES = 24 * 60
 # ``HH:MM`` 正则（与 rules.py ``_HHMM_RE`` 一致）。
 _HHMM_RE = re.compile(r"^\s*(\d{1,2}):(\d{2})\s*$")
 
+
 def _as_list(value) -> list:
     """把值规整为列表（None → []，标量 → [标量]）。"""
     if value is None:

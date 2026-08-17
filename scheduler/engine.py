@@ -30,7 +30,7 @@ from .groups import ModelGroupManager
 from .lifecycle import LifecycleEngine
 from .logs import SchedulerLog
 from .persistence import ConfigStore
-from .rules import RuleContext, RuleEngine
+from .rules import RuleContext, RuleEngine, _eval_when
 from .state import SessionState, SessionStateStore
 from .temporal import TemporalEngine
 
@@ -54,6 +54,12 @@ class DecisionTrace:
     temporal_group_match: dict | None = None
     replacement_chain: list = field(default_factory=list)
     temporal_reason: str = ""
+    # v1.0.3：强锁模型 / 关键词替换层（可选，序列化消费方向后兼容）。
+    lock_model: str | None = (
+        None  # 强锁模型名（lock_provider_id + lock_model 同时命中）
+    )
+    keyword_matched_rule: dict | None = None  # 关键词替换命中的规则（replace_model）
+    keyword_reason: str = ""  # 关键词层判定原因（含名义模型名 / 替换前后 / 忽略原因）
 
     def to_dict(self) -> dict:
         """转 dict（供 WebUI / 调试日志 / last_trace 持久化使用）。"""
@@ -73,6 +79,9 @@ class DecisionTrace:
             "temporal_group_match": self.temporal_group_match,
             "replacement_chain": list(self.replacement_chain),
             "temporal_reason": self.temporal_reason,
+            "lock_model": self.lock_model,
+            "keyword_matched_rule": self.keyword_matched_rule,
+            "keyword_reason": self.keyword_reason,
         }
 
 
@@ -212,8 +221,94 @@ class SchedulerEngine:
                     }
                 )
 
-            # 5. 上下文长度估算（简单模型：round * 512 + 消息长度）
+            # 4a. 强锁模型裁决（优先级最高）：lock_provider_id + lock_model 同时非空 →
+            #     直接确定最终 provider/模型名，跳过 关键词层 / 锁组 / 规则 / 校准 / temporal
+            #     全部决策链（仅保留 context_length 统计）。lock_group_id 单独非空仍走旧的
+            #     锁组路径（_decide 内处理）。
             context_length = state.round * 512 + len(str(meta.get("message_str") or ""))
+            if state.lock_provider_id and state.lock_model:
+                locked_pid = state.lock_provider_id
+                trace.final_provider_id = locked_pid
+                trace.final_group_id = None
+                trace.stage = state.stage
+                trace.lock_model = state.lock_model
+                trace.matched_rule = None
+                trace.rejected_rules = []
+                trace.condition_results = []
+                trace.reason = (
+                    f"模型锁定 {locked_pid} @ {state.lock_model}（最高优先级）"
+                )
+                available_ids = self._adapter.provider_ids()
+                if locked_pid in available_ids:
+                    old_pid = None
+                    try:
+                        old_pid = self._adapter.current_provider_id(umo)
+                    except Exception:  # noqa: BLE001 - 读取失败视为无当前
+                        old_pid = None
+                    if old_pid != locked_pid:
+                        try:
+                            await self._adapter.set_provider(locked_pid, umo)
+                            trace.changed = True
+                            self._slog.add(
+                                {
+                                    "time": _now_iso(),
+                                    "umo": umo,
+                                    "type": "switch",
+                                    "old": old_pid,
+                                    "new": locked_pid,
+                                    "group": None,
+                                    "rule": state.last_rule_id,
+                                    "temporal": "",
+                                    "chain": [],
+                                    "round": state.round,
+                                    "reason": trace.reason,
+                                }
+                            )
+                        except Exception:  # noqa: BLE001 - 切换失败不阻断调度
+                            self._logger.exception(
+                                "SchedulerEngine resolve 强锁模型 set_provider 失败"
+                            )
+                            self._slog.add(
+                                {
+                                    "time": _now_iso(),
+                                    "umo": umo,
+                                    "type": "error",
+                                    "level": "error",
+                                    "reason": f"强锁模型 set_provider({locked_pid}) 失败",
+                                }
+                            )
+                else:
+                    # 锁定的 Provider 不可用：记录 error（不中断，trace 仍保留锁定目标供展示）。
+                    self._slog.add(
+                        {
+                            "time": _now_iso(),
+                            "umo": umo,
+                            "type": "error",
+                            "level": "error",
+                            "reason": f"强锁模型 Provider {locked_pid} 不可用",
+                        }
+                    )
+                state.round += 1
+                changes: dict = {
+                    "round": state.round,
+                    "stage": state.stage,
+                    "group_cursor": state.group_cursor,
+                    "lifecycle_id": state.lifecycle_id,
+                    "lock_group_id": state.lock_group_id,
+                    "lock_provider_id": state.lock_provider_id,
+                    "lock_model": state.lock_model,
+                    "calibration_rounds_left": state.calibration_rounds_left,
+                    "calibration_group_id": state.calibration_group_id,
+                    "calibration_reason": state.calibration_reason,
+                }
+                if trace.changed:
+                    changes["current_provider_id"] = locked_pid
+                    changes["current_group_id"] = None
+                    changes["last_switch_at"] = time.time()
+                    changes["last_rule_id"] = state.last_rule_id
+                    changes["last_trace"] = dict(trace.to_dict())
+                await self._states.update(umo, **changes)
+                return self._finish(trace, t0, debug, umo)
 
             # 6. 构造 RuleContext 并评估规则
             tz = self._adapter.get_timezone()
@@ -292,6 +387,27 @@ class SchedulerEngine:
             trace.final_group_id = group_id
             trace.final_provider_id = final_provider_id
             trace.stage = stage or state.stage
+
+            # 10a0. 关键词替换层（v1.0.3）：正常决策（锁组→规则→校准→生命周期→base_group）
+            #     已确定候选 group/direct_provider 后、temporal model_override 叠加前评估。
+            #     解析名义模型名（C7）→ 命中 enabled 且含 model_keyword 条件的规则（按 priority
+            #     取最高者，动作 replace_model）→ 覆盖最终 provider/模型名。未命中/无从解析则
+            #     原样进入 temporal 层。
+            _keyword = self._resolve_keyword_layer(
+                ctx=rctx,
+                group_id=group_id,
+                direct_provider=direct_provider,
+                final_provider_id=final_provider_id,
+                available_ids=available_ids,
+            )
+            final_provider_id = _keyword["final_provider_id"]
+            if _keyword["matched_rule"] is not None:
+                trace.keyword_matched_rule = _keyword["matched_rule"]
+                trace.keyword_reason = _keyword["reason"]
+                if _keyword["reason"]:
+                    reason = (reason + "；" if reason else "") + _keyword["reason"]
+            else:
+                trace.keyword_reason = _keyword["reason"]
 
             # 10a. temporal 时间强制调度层（运行时替换，不改 0.1.x 决策语义；异常不阻断主流）。
             temporal_rule_id: str | None = None
@@ -439,7 +555,11 @@ class SchedulerEngine:
     # ------------------------------------------------------------------ #
 
     def _decide(
-        self, state: SessionState, matched_rule, settings: dict, meta: dict | None = None
+        self,
+        state: SessionState,
+        matched_rule,
+        settings: dict,
+        meta: dict | None = None,
     ) -> tuple[str | None, str | None, str, str | None, bool]:
         """按覆盖顺序确定本次应使用的模型组或直选 Provider。
 
@@ -542,7 +662,9 @@ class SchedulerEngine:
                             lifecycle_used = True
                         else:
                             # 组不存在/禁用 → 说明原因并落到 base_group 分支，不算生命周期命中。
-                            fallback_note = f"default_lifecycle {dfl} 无法使用：{reason}"
+                            fallback_note = (
+                                f"default_lifecycle {dfl} 无法使用：{reason}"
+                            )
                             if settings.get("base_group"):
                                 bg = str(settings["base_group"])
                                 group_id = bg
@@ -596,6 +718,146 @@ class SchedulerEngine:
             return state.calibration_group_id, "CALIBRATION", reason, True
         return group_id, stage, reason, False
 
+    # -------- 关键词替换层（v1.0.3） -------- #
+
+    def _provider_model_name(self, provider_id: str) -> str:
+        """查询 Provider 实例的默认模型名；adapter 无此能力 / 查不到返回 ""。"""
+        try:
+            method = getattr(self._adapter, "provider_model_name", None)
+            if callable(method):
+                return str(method(str(provider_id)) or "")
+        except Exception:  # noqa: BLE001 - 查询失败按查不到处理
+            self._logger.exception(
+                "SchedulerEngine provider_model_name(%r) 异常", provider_id
+            )
+        return ""
+
+    def _resolve_nominal_model_name(
+        self, group_id: str | None, direct_provider: str | None
+    ) -> str:
+        """解析名义模型名（契约 C7），供 model_keyword 条件评估。
+
+        优先级：
+        - ``direct_provider`` 非空 → 该 provider 的默认模型名；
+        - ``group_id`` 非空 → 组内第一个 enabled 且可用的成员：优先其 ``model_override``，
+          否则该 provider 的默认模型名；
+        - 均无法确定 → ``""``（model_keyword 不命中）。
+
+        Args:
+            group_id: ``_decide`` / 校准后确定的候选组（可能为 None）。
+            direct_provider: 直选 Provider id（可能为 None）。
+
+        Returns:
+            名义模型名；无法确定返回空串。
+        """
+        if direct_provider:
+            return self._provider_model_name(direct_provider)
+        if group_id:
+            group = self._groups.get(group_id)
+            if group:
+                try:
+                    available_ids = self._adapter.provider_ids()
+                except Exception:  # noqa: BLE001 - 读失败按空集合
+                    available_ids = set()
+                for entry in group.get("providers", []):
+                    pid = entry.get("provider_id")
+                    if entry.get("enabled", True) and pid in available_ids:
+                        override = entry.get("model_override")
+                        if override:
+                            return str(override)
+                        model = self._provider_model_name(pid)
+                        if model:
+                            return model
+        return ""
+
+    def _resolve_keyword_layer(
+        self,
+        *,
+        ctx: RuleContext,
+        group_id: str | None,
+        direct_provider: str | None,
+        final_provider_id: str | None,
+        available_ids: set[str],
+    ) -> dict:
+        """关键词替换层（v1.0.3）：评估 enabled 且含 ``model_keyword`` 条件的规则。
+
+        返回 ``{"final_provider_id", "matched_rule"|None, "reason"}``。
+        - 名义模型名无法确定 → 关键词层不命中，reason 记录原因，流程继续。
+        - 命中最高优先级（priority 降序）且 ``then.action == "replace_model"`` 的规则：
+          provider 存在于 ``available_ids`` 才覆盖最终 provider，并记录命中规则与替换前后；
+          provider 不存在/不可用 → 忽略该规则并记录原因（不中断流程）。
+        - 未命中 / 动作非 replace_model → 原样返回，进入 temporal 层。
+        语义与 rules 引擎一致：isolated 评估（只针对含 model_keyword 条件的 enabled 规则，
+        按 priority 取最高命中者），不因全局最高优先级规则是 switch_group 等而漏掉关键词替换。
+        """
+        result: dict = {
+            "final_provider_id": final_provider_id,
+            "matched_rule": None,
+            "reason": "",
+        }
+        try:
+            nominal = self._resolve_nominal_model_name(group_id, direct_provider)
+            if not nominal:
+                result["reason"] = "关键词层未生效：无法确定名义模型名"
+                return result
+
+            # 构造带 model_name 的上下文（在既有 ctx 浅拷贝上补字段，原 ctx 不受影响）。
+            kw_ctx = copy.copy(ctx)
+            kw_ctx.model_name = nominal
+
+            # 按 priority 降序遍历 enabled 规则，仅评估 when 含 model_keyword 的规则。
+            for rule in self._rules.list_(only_enabled=True):
+                when = rule.get("when") or {}
+                conds = [
+                    c
+                    for c in when.get("conditions") or []
+                    if isinstance(c, dict) and c.get("type") == "model_keyword"
+                ]
+                if not conds:
+                    continue  # 该规则不含 model_keyword 条件，非关键词层关注对象
+                # 规则级 scope 过滤（与 rules.evaluate 一致）。
+                try:
+                    scope_fail = self._rules._scope_fail_result(rule, kw_ctx)
+                except Exception:  # noqa: BLE001 - scope 评估异常按不匹配处理
+                    scope_fail = None
+                if scope_fail is not None:
+                    continue
+                try:
+                    when_results = _eval_when(when, kw_ctx)
+                    overall = when_results[-1].matched if when_results else False
+                except Exception:  # noqa: BLE001 - 单条求值异常不阻断关键词层
+                    self._logger.exception(
+                        "SchedulerEngine 关键词层求值异常 %r", rule.get("id")
+                    )
+                    continue
+                if not overall:
+                    continue
+                then = rule.get("then") or {}
+                if then.get("action") != "replace_model":
+                    continue  # 本层仅处理 replace_model 动作（其余动作由主决策链处理）
+                # 命中：校验目标 provider 可用。
+                target_pid = str(then.get("provider_id") or "")
+                if target_pid not in available_ids:
+                    result["reason"] = (
+                        f"关键词层忽略规则 {rule.get('name') or rule.get('id')}: "
+                        f"目标 Provider {target_pid} 不可用"
+                    )
+                    return result
+                target_model = str(then.get("model") or "")
+                result["matched_rule"] = copy.deepcopy(rule)
+                result["final_provider_id"] = target_pid
+                result["reason"] = (
+                    f"关键词替换：模型名 {nominal} 含关键词 → {target_pid} @ {target_model}"
+                )
+                return result
+            result["reason"] = (
+                f"关键词层未命中：模型名 {nominal!r} 无命中 replace_model 规则"
+            )
+        except Exception:  # noqa: BLE001 - 关键词层异常不阻断主流程
+            self._logger.exception("SchedulerEngine 关键词层异常")
+            result["reason"] = "关键词层异常（跳过）"
+        return result
+
     def _resolve_lifecycle(self, lifecycle_id: str, state: SessionState):
         """解析生命周期并决定当前组；失败时返回 None 组。"""
         lc = self._lifecycles.get(lifecycle_id)
@@ -646,6 +908,13 @@ class SchedulerEngine:
             temp.calibration_group_id = str(payload.get("calibration_group_id"))
         if payload.get("calibration_reason"):
             temp.calibration_reason = str(payload.get("calibration_reason"))
+        # v1.0.3：模拟可携带锁组 / 锁 Provider / 锁模型字段，使强锁与关键词层在模拟中可见。
+        if payload.get("lock_group_id"):
+            temp.lock_group_id = str(payload.get("lock_group_id"))
+        if payload.get("lock_provider_id"):
+            temp.lock_provider_id = str(payload.get("lock_provider_id"))
+        if payload.get("lock_model"):
+            temp.lock_model = str(payload.get("lock_model"))
 
         tz = self._adapter.get_timezone()
         try:
@@ -683,6 +952,23 @@ class SchedulerEngine:
             "umo": umo,
         }
 
+        # 强锁模型（模拟可见）：lock_provider_id + lock_model → 直接确定，跳过决策链。
+        if temp.lock_provider_id and temp.lock_model:
+            locked_pid = temp.lock_provider_id
+            ftrace = DecisionTrace(
+                umo=umo,
+                changed=locked_pid in available_ids,
+                final_provider_id=locked_pid,
+                final_group_id=None,
+                stage=temp.stage,
+                matched_rule=None,
+                rejected_rules=[],
+                condition_results=[],
+                reason=f"模型锁定 {locked_pid} @ {temp.lock_model}（最高优先级）",
+                lock_model=temp.lock_model,
+            )
+            return ftrace.to_dict()
+
         group_id, direct_provider, reason, stage, lifecycle_used = self._decide(
             temp, eval_result.get("matched_rule"), settings, sim_meta
         )
@@ -699,6 +985,22 @@ class SchedulerEngine:
                 self._groups.get(group_id), temp, available_ids
             )
             final_provider_id = provider
+
+        # 关键词替换层（模拟可见）：与 resolve 同语义，temporal 叠加前评估。
+        keyword_matched_rule: dict | None = None
+        keyword_reason = ""
+        _kw = self._resolve_keyword_layer(
+            ctx=rctx,
+            group_id=group_id,
+            direct_provider=direct_provider,
+            final_provider_id=final_provider_id,
+            available_ids=available_ids,
+        )
+        final_provider_id = _kw["final_provider_id"]
+        keyword_matched_rule = _kw["matched_rule"]
+        keyword_reason = _kw["reason"]
+        if _kw["matched_rule"] is not None and _kw["reason"]:
+            reason = (reason + "；" if reason else "") + _kw["reason"]
 
         # temporal 层：与 resolve 相同的两层（整组切换 → 模型替换），用 payload 的 now/meta 推演。
         temporal_matched: dict | None = None
@@ -761,6 +1063,11 @@ class SchedulerEngine:
             temporal_group_match=temporal_group_match,
             replacement_chain=replacement_chain,
             temporal_reason=temporal_reason,
+            lock_model=temp.lock_model
+            if (temp.lock_provider_id and temp.lock_model)
+            else None,
+            keyword_matched_rule=keyword_matched_rule,
+            keyword_reason=keyword_reason,
         )
         return trace.to_dict()
 

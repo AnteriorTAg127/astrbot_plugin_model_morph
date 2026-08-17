@@ -320,6 +320,22 @@ class RuntimeAdapter:
         """会话当前实际使用的 Provider id。"""
         return get_current_provider_id(self._context, umo)
 
+    def provider_model_name(self, provider_id: str) -> str:
+        """查询指定 Provider 实例的默认模型名（供引擎名义模型名解析 C7）。
+
+        通过对 ``get_provider_info_list`` 逐条比对 id 取 ``model``；查不到 / 异常返回 ""。
+        该方法为可选能力：引擎用 ``getattr`` 兜底，缺省按查不到处理，不阻塞调度。
+        """
+        try:
+            for item in get_provider_info_list(self._context):
+                if item.get("id") == provider_id:
+                    return str(item.get("model") or "")
+        except Exception:  # noqa: BLE001 - 查询失败按查不到处理
+            logger.warning(
+                "compat.provider_model_name: 查询 Provider %r 模型名失败", provider_id
+            )
+        return ""
+
     def now(self) -> datetime:
         """当前时间（调度时区）。"""
         return datetime.now(self.get_timezone())

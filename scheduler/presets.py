@@ -506,6 +506,7 @@ def _scope_from_params(params: dict) -> dict:
 
     三个可选参数均为「逗号分隔」字符串；trim / 去空项后成列表，全空 = 全局规则。
     """
+
     def _split(key: str) -> list:
         return [p.strip() for p in str(params.get(key) or "").split(",") if p.strip()]
 

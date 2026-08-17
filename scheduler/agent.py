@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 from astrbot.api import logger
@@ -36,6 +37,27 @@ from pydantic.dataclasses import dataclass
 
 from . import agent_tools
 from .agent_tools import ToolContext
+
+
+def _new_staging_batch(tc: ToolContext, prefix: str) -> str:
+    """给 tc 设置一笔新的一轮 Agent 对话暂存批次，并返回该批次标识。
+
+    ``tc``（``tool_ctx``）是 main.py 的**单例**，跨请求复用：每次 Agent 循环开始时
+    必须重新调用本函数覆盖 ``tc.staging_batch``（而不是在 __init__ 一次性设置），
+    从而天然区分「上一轮对话的旧暂存」与「本轮新暂存」；同一批内多次工具调用共享
+    同一 batch 值，实现同轮合并。
+
+    Args:
+        tc: ``ToolContext`` 实例。
+        prefix: 批次前缀（``sub`` / ``web``）。
+
+    Returns:
+        当轮暂存批次标识（如 ``sub_a1b2c3d4``）。
+    """
+    batch = f"{prefix}_{uuid.uuid4().hex[:8]}"
+    tc.staging_batch = batch
+    return batch
+
 
 # 配置 Agent 的中文系统提示词（涵盖 spec §28 全部要点）。
 CONFIG_AGENT_SYSTEM_PROMPT = (
@@ -71,34 +93,51 @@ CONFIG_AGENT_SYSTEM_PROMPT = (
     "kind=group_switch=本组请求走另一组）。\n"
     "b) 生命周期（lifecycle）：按会话轮数多阶段降级 / 周期校准 / 上下文压缩校准。触发词如"
     "「前 N 轮用 X，之后用 Y / 降级 / 校准」。→ 用 create_lifecycle / update_lifecycle。\n"
-    "c) 规则引擎规则（when/then 条件规则）：本版 Agent 工具集**不提供**对应的写工具。若用户"
-    "明确要求「条件规则 / 事件规则」，如实说明可在 WebUI 规则页配置，不要尝试用其他工具硬造。\n"
-    "d) 含糊词「调度」：先用查询工具（list_schedule_rules / list_lifecycles）了解现有配置；仍"
+    "c) 规则引擎规则（when/then 条件规则）：可用工具 create_rule / update_rule / delete_rule / "
+    "toggle_rule / list_rules / get_rule 完整读改。触发词如「规则 / 条件 / when-then / 根据哪类条件路由」。"
+    "规则引擎的**写操作会一律暂存等待管理员批准**（见下文「分级审批」），不会立即生效。\n"
+    "c2) 关键词替换（v1.0.3）：用 create_rule 新建规则，when 用 model_keyword 条件（keywords+"
+    "mode=all/any/min_n 三枚举，判断「本次请求模型名」是否含关键词，all=全部/any=任一/min_n=至少 N 个，"
+    "1≤min_n≤len(keywords)），then 用 replace_model 动作（provider_id=目标 Provider id、model=目标模型名）"
+    "把最终请求的模型名强制替换为该 Provider 指定模型（不改组/偏好/上下文）。\n"
+    "d) 含糊词「调度」：先用查询工具（list_rules / list_schedule_rules / list_lifecycles）了解现有配置；仍"
     "无法确定管理员意图时，向管理员确认后再执行，不要擅自猜测创建。\n"
     "e) 防止多余调用：一句需求**只触发一次**写流程；禁止对同一目标重复 create；任何 create / "
     "update 之前必须先用查询工具确认目标存在及当前值（先查询再修改）。\n\n"
+    "【分级审批（v1.0.3，务必遵守）】所有写操作按风险分两类（仅对工具路径生效）：\n"
+    "- **低风险写（自动执行）**：创建类（create_model_group / create_schedule_rule / "
+    "create_lifecycle）与启停类（enable_schedule_rule / disable_schedule_rule）调用即校验并直接生效，"
+    '无需人工批准，返回 {"ok": true, ...}。\n'
+    "- **高危写（暂存待批准）**：删除（delete_*）、修改已有配置（update_* / toggle_rule）、规则引擎全部"
+    ' CRUD（含 create_rule）。工具返回 {"ok": true, "status": "staged", "pending_id": "p_...", '
+    '"summary": [...], "approval_hint": "..."}，表示变更**不会立即生效**，已存入暂存区等待管理员批准。'
+    "此时应在回复中**原样转述工具返回的 approval_hint**（它已按当前场景给出正确的批准方式），"
+    "不要自行编造其他批准指令。\n"
+    "- 当 ``settings.agent_confirm=false`` 时，高危写操作**直接执行**（等同旧行为，风险由管理员自负），"
+    '工具返回 {"ok": true, ...}；此时无需提示批准，直接汇报已生效。\n\n'
     "【你的职责（8 条）】\n"
     "1. 查询并解释当前配置：模型组、Provider、现有规则、生效中的时间调度规则、调度器状态。\n"
     "2. 创建模型组，并支持向组内指定 Provider。\n"
     "3. 更新模型组（改名、换 Provider、调优先/权重、启停成员）。\n"
-    "4. 删除模型组（属于高危操作，必须走预览→确认→应用流程）。\n"
-    "5. 创建时间调度规则（模型替换 model_override / 整组切换 group_switch 两类）。\n"
-    "6. 更新 / 停用 / 启用 / 删除时间调度规则（删除属高危操作）。\n"
+    "4. 删除模型组 / 时间规则 / 生命周期（高危写，默认暂存等待管理员批准，见「分级审批」）。\n"
+    "5. 创建时间调度规则（模型替换 model_override / 整组切换 group_switch 两类）——低风险直接生效。\n"
+    "6. 更新 / 停用 / 启用 / 删除时间调度规则（删除与更新默认暂存）。\n"
     "7. 校验当前配置并汇报错误 / 警告 / 规则冲突。\n"
-    "8. 管理 预览 → 应用 → 回滚 流程，确保高风险变更可撤销。\n\n"
+    "8. 管理 预览 → 应用 → 回滚 流程（老 Web 流程兼容）；新写操作走分级审批（自动 / 暂存）。\n\n"
     "【你绝不能（6 条）】\n"
     "1. 绝不能编造不存在的模型组或 Provider：动手前必须先用查询工具确认真实 id，再引用它。"
-    "2. 绝不能跳过预览：凡涉及删除、单批≥3 项写操作，或工具明确要求 preview 的高危变更，"
-    "必须先调用 preview_configuration_change 生成预览，经管理员确认后再 apply。\n"
+    "2. 涉及删除、修改已有配置或规则引擎写操作时，默认会暂存等待管理员批准；必须如实转述"
+    "工具返回的 approval_hint（批准方式以它为准），绝不能在未批准的情况下向管理员宣称「已生效」。\n"
     "3. 绝不能乱猜时间规则的含义：跨午夜、星期、时区都有严格语义，见下文「时间规则语义」。\n"
     "4. 绝不能直接修改基础配置或删改无关内容，一次只处理管理员要求的变更。\n"
     "5. 绝不能隐瞒失败：某个工具返回失败时，必须如实告知管理员原因。\n"
     "6. 绝不能在没有确凿依据时声称「已生效」：应用成功才算完成。\n\n"
-    "【你的工作流】严格按：查询 → 理解 → 规划 → 验证 → 预览 → 执行 → 汇报。\n"
-    "先查询现状，理解管理员意图并确定要改的对象（组 / 规则），规划需要的一组操作，"
-    "运行时校验参数，对高危或批量变更先 preview 生成预览，确认后再 apply，最后用中文向"
-    "管理员解释改了什么、当前状态如何、如何回滚。遵循「先查询再修改」：create / update 前"
-    "先用读取工具确认目标存在及当前值。\n\n"
+    "【你的工作流】严格按：查询 → 理解 → 规划 → 验证 → 执行 / 暂存 → 汇报。\n"
+    "先查询现状，理解管理员意图并确定要改的对象（组 / 规则 / 生命周期），规划需要的一组操作，"
+    "运行时校验参数；低风险写直接生效，高危写默认暂存（status=staged + pending_id + approval_hint）"
+    "并**原样转述 approval_hint** 给管理员；老 Web 流程如需，可用 preview_configuration_change 生成预览、"
+    "apply 应用、rollback 回滚。最后用中文向管理员解释改了什么、当前状态、如何批准/回滚。遵循"
+    "「先查询再修改」：create / update 前先用读取工具确认目标存在及当前值。\n\n"
     "【时间规则语义（务必遵守）】\n"
     "- 时间类型：daily（每天）/ weekly（每周，需 weekdays）/ date（指定日期 YYYY-MM-DD）/"
     "always（始终）。\n"
@@ -109,8 +148,8 @@ CONFIG_AGENT_SYSTEM_PROMPT = (
     "整组切换 group_switch：本选 group_id 组的请求改为 target_group。\n\n"
     '【工具失败与重试】某工具返回 {"ok": false, "error": ...} 时，先根据 error 修正参数后'
     "重试，最多重试 2 次；仍失败则停止，并如实向管理员汇报失败原因，绝不假装成功。\n\n"
-    "【汇报】全部完成后，用中文向管理员解释：做了什么、改动了哪些模型/规则、当前生效状态、"
-    "如有待应用的预览请提示管理员预览并应用。\n\n"
+    "【汇报】全部完成后，用中文向管理员解释：做了什么、改动了哪些模型/规则、当前生效状态；"
+    "如工具返回了 approval_hint，请**原样转述**（不要自行改写批准方式）。\n\n"
     "【降级生命周期编排（v0.1.6 多阶段降级 + 事件校准）】\n"
     "- 多阶段降级用 create_lifecycle 的 stages 完成：stages=[{group_id, rounds}...]"
     "按累计轮次逐段切换（前 4 轮 → A 组，5-9 轮 → B 组，……），rounds 全部耗尽后走 "
@@ -137,12 +176,42 @@ CONFIG_AGENT_SYSTEM_PROMPT = (
     "  4) 全局启用：set_default_lifecycle(生命周期 id)；\n"
     "  5) 建时段路由：create_schedule_rule 两条 model_override（09:00-11:00 与 14:00-18:00，"
     "source=V4 provider id，target=Luna provider id）；\n"
-    "  6) 校验与预览：validate_configuration 确认无错误，再 preview_configuration_change "
-    "生成预览，经管理员确认后 apply_configuration_change 应用；\n"
+    "  6) 校验：validate_configuration 确认无错误（创建类为低风险，已直接生效；旧 Web 流程如需批量"
+    "预览/回滚，仍可用 preview_configuration_change → apply_configuration_change）；\n"
     "  7) 用中文汇报全部创建结果与当前生效状态。\n"
-    "工作流严格按：先查询 → 再创建 → 校验 → 预览 → 应用 → 中文汇报；任何一步工具返回失败，"
-    "先按 error 修正重试，仍失败则如实汇报。"
+    "工作流严格按：先查询 → 再创建（低风险直接生效）→ 校验 → 中文汇报；若涉及删除/修改/规则写操"
+    "作则默认暂存并提示管理员批准；任何一步工具返回失败，先按 error 修正重试，仍失败则如实汇报。"
 )
+
+
+def build_config_system_prompt(source: str) -> str:
+    """按来源构造配置 Agent 系统提示词。
+
+    SubAgent（聊天）与 Web 助手（页面）的「批准方式」指引必须不同：
+    - ``web_agent``：管理员在页面「待批准更改」卡片中点击「批准 / 拒绝」按钮
+      （WebUI **没有指令输入框**，让管理员执行 ``/scheduler approve`` 是无法完成的操作）；
+    - ``subagent`` 等其它：管理员在聊天中执行 ``/scheduler approve|reject|pending`` 指令。
+
+    公共部分沿用 ``CONFIG_AGENT_SYSTEM_PROMPT``，仅追加一段「当前场景」指引，
+    并配合工具返回的 ``approval_hint``（已按来源生成）约束 LLM 的汇报方式。
+
+    Args:
+        source: 场景来源（``web_agent`` / ``subagent`` / 其它）。
+
+    Returns:
+        完整系统提示词。
+    """
+    scene = (
+        "【当前场景：Web 配置助手（页面）】管理员正在使用网页端 AI 助手，页面底部会自动出现"
+        "「待批准更改」卡片，展示变更摘要与「批准 / 拒绝」按钮。**不要**让管理员执行任何聊天指令"
+        "（如 ``/scheduler approve``）——网页里没有指令输入框，无法执行。只需告诉管理员：变更已"
+        "暂存，请在页面卡片中点击『批准』按钮生效，或点击『拒绝』按钮放弃（可展开卡片查看原始数据）。\n\n"
+        if str(source or "") == "web_agent"
+        else "【当前场景：聊天 SubAgent（消息对话）】管理员正在与机器人聊天。变更已暂存后，请明确"
+        "告诉管理员在**聊天中**执行：批准 ``/scheduler approve <pending_id>``、放弃 "
+        "``/scheduler reject <pending_id>``、查看 ``/scheduler pending``（均仅管理员）。\n\n"
+    )
+    return CONFIG_AGENT_SYSTEM_PROMPT + scene
 
 
 def build_config_toolset(tc: ToolContext) -> ToolSet:
@@ -177,8 +246,9 @@ def build_config_toolset(tc: ToolContext) -> ToolSet:
         ),
         (
             "tool_list_rules",
-            "查询现有规则与时间调度规则。返回值含：rules（when/then 条件规则，本版无写工具，仅读）、"
-            "temporal_rules（时间调度规则）。用于「含糊调度词」时先查看现状。",
+            "查询现有规则引擎规则与时间调度规则。返回值含：rules（when/then 条件规则，含 "
+            "id/name/when 条件/then 动作/priority/scope/enabled）、temporal_rules（时间调度规则）。"
+            "用于「含糊调度词」或规则操作前先查看现状。",
             {},
         ),
         (
@@ -205,6 +275,68 @@ def build_config_toolset(tc: ToolContext) -> ToolSet:
             "provider（最终 Provider id）、temporal_matched_id（命中的时间调度规则 id，未命中为空）、"
             "replacement_chain（替换链，A→B 逐级）、reason（推演说明）。不改动任何配置。",
             {},
+        ),
+        # ---- v1.0.3：规则引擎（when/then 条件规则）工具 ----
+        (
+            "tool_get_rule",
+            "按 rule_id 查询单条 when/then 条件规则详情（含完整 when 条件数组、then 动作、"
+            "priority、scope、enabled）。未精确命中时返回 candidates（相似规则 id/名称）。"
+            "用于规则操作前确认目标规则现状。",
+            {"rule_id": "条件规则 id"},
+        ),
+        (
+            "tool_create_rule",
+            "新建 when/then 条件规则。spec 结构："
+            "name（规则名）、enabled（默认 true）、priority（int，越高越先匹配）、"
+            'scope（作用域结构 {"groups": [], "users": [], "sessions": []}，全空=全局）、'
+            'when（条件容器：{"op": "and"|"or", "conditions": [条件...]}，条件类型含 '
+            "time_range/date_weekday/scope/keyword/command/at_bot/message_type/round_gte/"
+            "context_length_gte/lifecycle_event/model_keyword）、"
+            'then（动作：{"action": "switch_group"|"switch_provider"|"apply_lifecycle"|'
+            '"unlock"|"replace_model", ...}）。'
+            'model_keyword 条件结构：{"type":"model_keyword", "keywords": [关键词...] 非空数组, '
+            '"mode": "all"|"any"|"min_n", "min_n": int}，判断「本次请求模型名」是否含关键词'
+            "（all=全部命中、any=任一命中、min_n=命中数≥min_n 且 1≤min_n≤len(keywords)）。"
+            'replace_model 动作结构：{"action":"replace_model", "provider_id": 已配置Provider id, '
+            '"model": 目标模型名}，把最终请求的模型名强制替换为该 Provider 的指定模型（不改组/偏好/上下文）。'
+            "**高危写操作：调用后不会立即生效，会暂存等待管理员批准 "
+            "（批准方式以工具返回的 approval_hint 为准，原样转述）。**",
+            {
+                "spec": {
+                    "type": "object",
+                    "description": (
+                        "条件规则字典：{name, enabled, priority, scope, "
+                        'when: {op: "and"|"or", conditions: [{type, ...}]}, '
+                        'then: {action: "switch_group"|"switch_provider"|"apply_lifecycle"|"unlock"|'
+                        '"replace_model", ...}}'
+                    ),
+                }
+            },
+        ),
+        (
+            "tool_update_rule",
+            "修改 when/then 条件规则（合并式，只写需要改的键）。rule_id 为目标规则 id；spec 结构同 "
+            "create_rule（when/then/priority/scope/enabled）。**高危写操作：会暂存等待管理员批准 "
+            "（批准方式以工具返回的 approval_hint 为准，原样转述）。**",
+            {
+                "rule_id": "条件规则 id",
+                "spec": {
+                    "type": "object",
+                    "description": "要更新的字段（结构同 create_rule 的 spec，只写需要改的键）",
+                },
+            },
+        ),
+        (
+            "tool_delete_rule",
+            "删除 when/then 条件规则（不可恢复）。rule_id 为目标规则 id。**高危写操作：会暂存等待"
+            "管理员批准（批准方式以工具返回的 approval_hint 为准，原样转述）。**",
+            {"rule_id": "条件规则 id"},
+        ),
+        (
+            "tool_toggle_rule",
+            "启用 / 停用 when/then 条件规则（翻转 enabled）。rule_id 为目标规则 id。**高危写操作："
+            "会暂存等待管理员批准（批准方式以工具返回的 approval_hint 为准，原样转述）。**",
+            {"rule_id": "条件规则 id"},
         ),
         (
             "tool_create_model_group",
@@ -254,8 +386,8 @@ def build_config_toolset(tc: ToolContext) -> ToolSet:
             "target_group（kind=group_switch 用）须先用查询确认存在。"
             "schedule 四类型：always=始终 / daily=每天（需 start/end 为 24h 制 HH:MM，end<start 表示跨午夜）/"
             "weekly=每周（需 weekdays 0=周一..6=周日，必填）/ date=指定日期（需 date 为 YYYY-MM-DD）。"
-            "priority：int，越高越先匹配。scope 结构 {\"groups\": [群号...], \"users\": [QQ...], "
-            "\"sessions\": [完整UMO...]}，三键全空=全局。",
+            'priority：int，越高越先匹配。scope 结构 {"groups": [群号...], "users": [QQ...], '
+            '"sessions": [完整UMO...]}，三键全空=全局。',
             {
                 "spec": {
                     "type": "object",
@@ -560,11 +692,13 @@ class ModelMorphConfigAgentTool(FunctionTool[AstrAgentContext]):
                 chat_provider_id = await ctx.get_current_chat_provider_id(
                     event.unified_msg_origin
                 )
+            # 本轮对话分配一个暂存批次：同轮连续高危写合并，跨轮覆盖（见 _new_staging_batch）。
+            _new_staging_batch(tc, "sub")
             llm_resp = await ctx.tool_loop_agent(
                 event=event,
                 chat_provider_id=chat_provider_id,
                 prompt=query,
-                system_prompt=CONFIG_AGENT_SYSTEM_PROMPT,
+                system_prompt=build_config_system_prompt(tc.source),
                 tools=build_config_toolset(tc),
                 max_steps=30,
             )
@@ -626,6 +760,8 @@ async def run_web_agent(context, tc: ToolContext, messages, chat_provider_id) ->
     try:
         tc.source = "web_agent"
         tc.operator = "admin"
+        # 本轮对话分配一个暂存批次：同轮连续高危写合并，跨轮覆盖（见 _new_staging_batch）。
+        _new_staging_batch(tc, "web")
         # 合成管理员事件（AstrAgentContext.event 不接受 None，见 _make_web_admin_event）。
         event = _make_web_admin_event()
         agent_context = AstrAgentContext(context=context, event=event)
@@ -638,7 +774,7 @@ async def run_web_agent(context, tc: ToolContext, messages, chat_provider_id) ->
         llm_resp = await context.tool_loop_agent(
             event=event,
             chat_provider_id=chat_provider_id,
-            system_prompt=CONFIG_AGENT_SYSTEM_PROMPT,
+            system_prompt=build_config_system_prompt(tc.source),
             tools=build_config_toolset(tc),
             contexts=contexts,
             max_steps=30,
@@ -687,6 +823,8 @@ async def run_web_agent_stream(context, tc: ToolContext, messages, chat_provider
     try:
         tc.source = "web_agent"
         tc.operator = "admin"
+        # 本轮对话分配一个暂存批次：同轮连续高危写合并，跨轮覆盖（见 _new_staging_batch）。
+        _new_staging_batch(tc, "web")
         # 解析 Provider（与 tool_loop_agent / POST 流程一致；无该 Provider 视为整体失败）。
         provider = await context.provider_manager.get_provider_by_id(chat_provider_id)
         if provider is None:
@@ -700,11 +838,13 @@ async def run_web_agent_stream(context, tc: ToolContext, messages, chat_provider
             audio_urls=[],
             func_tool=build_config_toolset(tc),
             contexts=[
-                Message(role=m.get("role", "user"), content=m.get("content", "")).model_dump()
+                Message(
+                    role=m.get("role", "user"), content=m.get("content", "")
+                ).model_dump()
                 for m in (messages or [])
                 if isinstance(m, dict)
             ],
-            system_prompt=CONFIG_AGENT_SYSTEM_PROMPT,
+            system_prompt=build_config_system_prompt(tc.source),
         )
         event = _make_web_admin_event()
         agent_context = AstrAgentContext(context=context, event=event)
@@ -714,7 +854,9 @@ async def run_web_agent_stream(context, tc: ToolContext, messages, chat_provider
         # 镜像 tool_loop_agent：func_tool 含 astrbot_file_read_tool 时才设置溢出目录与读工具。
         other_kwargs: dict = {}
         if request.func_tool and request.func_tool.get_tool("astrbot_file_read_tool"):
-            other_kwargs.setdefault("tool_result_overflow_dir", get_astrbot_system_tmp_path())
+            other_kwargs.setdefault(
+                "tool_result_overflow_dir", get_astrbot_system_tmp_path()
+            )
             other_kwargs.setdefault(
                 "read_tool", request.func_tool.get_tool("astrbot_file_read_tool")
             )
@@ -779,7 +921,9 @@ async def run_web_agent_stream(context, tc: ToolContext, messages, chat_provider
         try:
             yield {"type": "error", "message": str(exc)}
         except Exception:  # noqa: BLE001 - 极端情况下游已断开，静默结束
-            logger.warning("agent: run_web_agent_stream 产出 error 帧失败（下游已断开）")
+            logger.warning(
+                "agent: run_web_agent_stream 产出 error 帧失败（下游已断开）"
+            )
 
 
 def _extract_plain_text(chain) -> str:
