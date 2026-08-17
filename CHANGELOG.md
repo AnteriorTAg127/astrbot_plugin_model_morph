@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.3] - 2026-08
+## [1.0.3] - 2026-08-18
 
 ### Added
 
@@ -19,7 +19,7 @@
 - AI 助手流式 `done` 帧 / `GET agent/pending` 的 pending 结构扩展为 `{pending_id, summary[], staged_at, ...}`（旧 preview 字段保留兼容）。
 - 原有高危写工具（删除/修改模型组、时间规则、生命周期）由「preview→apply」改为「暂存→管理员批准」；`preview/apply/rollback_configuration_change` 工具保留兼容旧 Web 流程。
 
-## [1.0.2] - 2026-08
+## [1.0.2] - 2026-08-16
 
 ### Added
 
@@ -31,7 +31,14 @@
 - **🔧 LLM 工具提示词完善**：全部工具描述重写为「用途 + 关键参数 + 取值枚举」——strategy 五枚举语义、kind 二枚举、schedule 四类型与字段约束（HH:MM/跨午夜/weekdays 0-6/YYYY-MM-DD）、scope 结构（groups/users/sessions + UMO）、生命周期 stages/final_group/periodic/calibration 字段、preview ops 枚举、查询工具返回值字段含义。
 - 测试：新增 `tests/test_umo.py`（33 条，含 G1-G3 行为锁定）与 `tests/test_agent_prompt.py`（9 条提示词断言），全量 **386 个离线用例通过**，ruff 全绿；SSE 流式、Markdown 渲染、UMO 预览与消歧对话列入手动验证清单（见 README）。
 
-## [1.0.0] - 2026-06 — 首个正式版本
+## [1.0.1] - 2026-08-14
+
+### Fixed
+
+- **限定群组（scope）补全**：规则/生命周期/时间规则的限定群组输入升级为标签式输入（回车添加 / 点击 × 删除，蓝底白字标签），修复深色主题下标签框白底白边问题；前端展示缺口修复。
+- 同步：dev 分支的修复（`56fa8fb` / `ef5057a` / `ee654d7`）合入主分支发布。
+
+## [1.0.0] - 2026-08-14 — 首个正式版本
 
 > 说明：本次 1.0.0 为**首个正式发布版本**（此前历史误标的 1.0.0/1.0.1/1.0.2 实为 0.1.2/0.1.3/0.1.4 的错标，见下文「版本号勘误说明」）。0.1.5 ~ 0.1.10 为开发迭代序列，本版将其全部能力冻结为正式版。
 
@@ -44,16 +51,16 @@
 - temporal 时间强制调度：`model_override` 时段模型替换与 `group_switch` 整组切换，运行时生效、时间结束自动恢复；优先级体系 1000/500/200/100/0；冲突检测（priority_tie / shadowed）；前端「时间规则」视图。
 - Agent 配置层：聊天 SubAgent（仅管理员）+ Web AI 配置助手（预览→应用→回滚），30 个结构化工具；5 个预设；配置校验；审计日志；AI 助手会话后端持久化（50 会话 / 200 条）。
 - Web 前端模型切换修复：WebChat 下插件决策与 `/provider` 会话偏好回灌 `selected_provider` extra，优先级为 插件决策 > /provider 会话偏好 > 前端下拉选择（插件禁用时不干预）。
-- WebUI：16 个视图（总览/模型组/规则/时间规则/生命周期/会话/日志/审计/模拟器/设置/AI 助手/配置向导/预设），中英双语、深色模式、无 CDN。
+- WebUI：13 个视图（总览/模型组/规则/时间规则/生命周期/会话/日志/审计/模拟器/设置/AI 助手/配置向导/预设），中英双语、深色模式、无 CDN。
 - 兼容与工程：旧配置自动迁移（schema v1→v2）；`/scheduler` 指令组；331 个离线测试用例；ruff 全绿。
 
-## [0.1.10] - 2026-06
+## [0.1.10] - 2026-08-14
 
 ### Fixed
 
 - 修复「web 前端（WebChat）下 /provider 指令与插件自动切换模型均无效」：根因为 AstrBot `_select_provider` 优先采用前端每条消息携带的 `selected_provider` extra（web 模型下拉选择存于 localStorage，恒非空），导致 umo 会话存储（`provider_perf_chat_completion`，/provider 与插件 `set_provider` 的写入目标）永远不被读取。插件现在于 `on_waiting_llm_request` 中把调度决策（或 /provider 写入的会话偏好）回灌到 `selected_provider` extra：插件有决策时决策优先；插件无决策且存在会话偏好时，偏好覆盖前端下拉；插件禁用（原生面板关闭）时不干预。`compat.py` 新增 `get_session_provider_preference()`（经 `astrbot.core.sp.session_get` 读取会话偏好，异常兜底返回 None）。
 
-## [0.1.9] - 2026-06
+## [0.1.9] - 2026-08-14
 
 ### Added
 
@@ -61,7 +68,7 @@
 - **冲突横幅**：页面顶部按 `validate` 返回的 `conflicts` 渲染警示横幅，逐条展示「规则A ⇄ 规则B：同组同时段但去向不同」，并区分 `priority_tie`（同级并列，低优先级将被高优先级遮蔽）/ `shadowed`（被遮蔽）两种 note，黄色警示样式复用现有 badge/warning 体系。
 - 时间段在列表按 type 语义化展示：`always`=始终、`daily`=每天、`weekly`=每周[周几]、`date`=date start-end，跨午夜（`end<start`）自动标注「跨午夜」。
 
-## [0.1.8] - 2026-06
+## [0.1.8] - 2026-08-14
 
 ### Added
 
@@ -69,13 +76,13 @@
 - **会话列表 / 切换 / 删除 API**：新增 `agent/conversations`（GET，query `id` 为空返回概要列表、非空返回单会话完整 JSON）与 `agent/conversations/delete`（POST，删除会话并记审计 `chat_delete`）。
 - **`agent/chat` 双流程兼容**：`content` 非空 → 会话持久化流程（可选 `conversation_id` 续接，自动新建会话标题取首条，取最近 60 条给 LLM，成功后写回 assistant 消息，审计 `agent_chat`）；`messages` 为列表 → 保留 v0.1.7 旧流程（无持久化，前端不再使用）；两者皆非返回 400。`agent_provider_id` 优先解析 Provider、否则回退默认聊天 Provider 的逻辑不变。
 
-## [0.1.7] - 2026-06
+## [0.1.7] - 2026-08-14
 
 ### Fixed
 
 - 修复「AI 助手创建的模型组在模型组页不可见」：前端 tab 懒加载缓存导致切回列表页显示过期数据。现在每次切入 tab 都重新拉取数据并刷新参考下拉（app.js）；模型组页新增「↻ 刷新」按钮；`groups` 接口拉取失败不再静默渲染空列表（改为 toast 提示 + 错误空态）。数据本身一直正确落盘（config.json），无需迁移。
 
-## [0.1.6] - 2026-06
+## [0.1.6] - 2026-08-14
 
 ### Added（0.1.6 交付清单）
 
@@ -95,7 +102,7 @@
 > 的错标（内容本身不变，仅版本号序列有误）。自本版起**改用 0.1.x 序列**，并把历史条目版本号
 > 一并勘误为 0.1.2 / 0.1.3 / 0.1.4，与 `metadata.yaml` 的 `v0.1.5` 对齐。
 
-## [0.1.5] - 2026-06
+## [0.1.5] - 2026-08-14
 
 ### Added（0.1.5 交付清单）
 
@@ -112,7 +119,7 @@
 - **⑪ 旧配置自动迁移**：磁盘配置 schema v1 首次加载自动升级为 v2（补 `temporal_rules=[]`、`settings.agent_confirm=True`），`import_all` 兼容 v1/v2。
 - **⑫ 兼容保留**：现有 0.1.x 的 groups / rules / lifecycles / sessions / 调度引擎 / WebUI 功能与测试全部保留。
 
-## [0.1.4] - 2026-06
+## [0.1.4] - 2026-08-14
 
 ### Fixed
 
@@ -122,14 +129,14 @@
 
 - WebUI 按「群聊记录存储」插件的 dashboard 设计系统整体重写（三段式滑动高光导航、Arco 风格双主题设计令牌、标准卡片/表格/弹窗/Toast 组件、防 XSS 渲染规范），8 个视图功能与后端 API 契约不变，中英双语键集（249 项）一致，无外部 CDN。
 
-## [0.1.3] - 2026-06
+## [0.1.3] - 2026-08-14
 
 ### Fixed
 
 - 修复 AstrBot 运行时插件加载失败（`ModuleNotFoundError: No module named 'scheduler'`）：AstrBot 以包形式加载插件（`data.plugins.<插件名>`），插件目录不在 `sys.path` 上，`main.py` 与 `web/api.py` 的包内导入全部改为相对导入；已按加载器真实路径验证导入成功。
 - 修复 `_conf_schema.json` 数组格式导致插件加载失败（`AttributeError: 'list' object has no attribute 'items'`）：AstrBot v4.27 要求配置 Schema 顶层为 JSON 对象（每个配置键为 key），已改为对象格式并经真实 `AstrBotConfig` 解析验证。
 
-## [0.1.2] - 2026-06
+## [0.1.2] - 2026-08-14
 
 ### Added
 

@@ -66,9 +66,9 @@
 
 ## WebUI 使用说明
 
-插件详情页 → 打开 **Model Morph** Page（8 个核心视图 + v0.1.5 新增 4 个 tools 分区 Tab）：
+插件详情页 → 打开 **Model Morph** Page（8 个核心视图 + 4 个 tools 分区 Tab）：
 
-1. **Dashboard**：调度器开关状态、当前时区、Provider/组/规则/会话计数、最近切换与最近错误；v0.1.5 新增「当前生效时段规则」卡片。
+1. **Dashboard**：调度器开关状态、当前时区、Provider/组/规则/会话计数、最近切换与最近错误；内置「当前生效时段规则」卡片。
 2. **Model Groups**：新建/编辑/复制/启停模型组；编辑面板含策略下拉、成员表格（Provider 下拉、权重、冷却、最大次数）、fallbacks 多选。
 3. **Rules**：条件行编辑器（类型下拉 + 参数 + AND/OR + THEN 动作 + 优先级），每条规则可一键「模拟」。
 4. **Lifecycles**：初始组/初始轮数/主组/周期组/周期间隔编辑，内置 Balanced / Quality / Cost Saving / New Conversation 四套模板一键载入。
@@ -77,7 +77,7 @@
 7. **Simulator**：输入时间/群/用户/会话/轮数/事件/消息 → 返回命中规则、拒绝规则及失败条件、最终 Provider 与原因（Dry Run，不影响真实状态）。
 8. **Settings**：时区（auto=跟随 AstrBot）/ 默认模型组 / **全局默认生命周期（default_lifecycle）** / **配置助手模型（agent_provider_id）** / 日志保留数 / Agent 确认开关 / 审计保留数 / 会话状态持久化 + 配置导入导出（JSON）。「启用调度器」与「调试模式」两个总开关在 **AstrBot 原生插件配置面板**中修改，此处只读展示。
 
-**v0.1.5 新增 Tab（tools 分区）**：
+**Tools 分区 Tab**：
 - **AI 助手**：自然语言对话配置模型调度（流式输出 + Markdown 渲染，预览/应用/撤销），底部提供快捷需求 chips；对话可持久化、侧栏切换历史会话。
 - **配置向导**：六步可视化创建时间调度规则，无需手写 JSON。
 - **预设**：5 个一键套用的时间调度预设。
@@ -118,6 +118,8 @@
   - `logs.json`：调度日志持久化
   - `audit.json`：审计日志持久化
   - `state.json`：会话运行时状态快照（每 300 秒 + 插件卸载时）
+  - `pending.json`：Agent 高危写操作暂存区（待管理员批准，含人性化 summary）
+  - `agent_chats.json`：AI 助手会话历史（最多 50 会话 / 200 条，超出淘汰最旧）
 - 时区：`timezone: auto` 跟随 AstrBot 全局配置时区；也可显式填写 IANA 时区名（如 `Asia/Shanghai`）。WebUI Dashboard 显示当前检测到的时区。
 - `agent_confirm`（默认开）：**高危写操作（删除、修改已有配置、规则引擎写操作）进入暂存区等待管理员批准**（`/scheduler approve` / `reject`）；关闭后高危写直接执行（仍记审计）。查询、创建、启停类写操作始终自动执行（校验失败拒绝）。
 - `default_lifecycle`（默认空）：全局默认生命周期 id，无锁会话据此做多阶段降级；可用 Agent 工具 `set_default_lifecycle` 或 Settings 页设置，空串清除。
@@ -181,7 +183,7 @@
 | 某条规则不命中 | 打开 Rules 页该规则的「模拟」按钮，或 Simulator 页填入相同输入查看失败条件与原因；检查 scope 的 exclude 是否误伤 |
 | 模型组选择不符合预期 | 检查成员 `enabled`、`max_uses`、`cooldown_seconds` 与 Provider 是否仍存在于 AstrBot；组策略是否正确 |
 | 想看决策细节 | Settings 开启 `debug`，AstrBot 日志将输出完整 DecisionTrace |
-| 数据位置 | `data/plugin_data/astrbot_plugin_model_morph/`（config/logs/audit/state 四个 JSON） |
+| 数据位置 | `data/plugin_data/astrbot_plugin_model_morph/`（config/logs/audit/state/pending/agent_chats 六个 JSON） |
 
 ## 已知限制
 
@@ -193,15 +195,18 @@
 
 ## 开发
 
+<!-- 以下内容依赖 tests/ 与 开发/ 目录（仅 dev 分支存在，不入库、远程分支不可见），故隐藏：
+
 ```bash
 # 离线测试（无需运行 AstrBot；在插件根目录执行）
 python -m pytest tests -q -p no:cacheprovider
 ```
 
 > 测试临时数据自动落在 `开发/v0.1/.pytest_tmp/`（`tests/conftest.py` 内可移植路径），不依赖系统 tempfile。
+-->
 
-- 代码结构：`main.py`（Star 入口/钩子/命令）→ `scheduler/`（compat 兼容层 / persistence 持久化 / state 会话状态 / groups 模型组 / rules 规则 / lifecycle 生命周期 / temporal 时间调度 / audit 审计 / agents agent 配置层 / presets 预设 / engine 调度引擎 / logs 日志）→ `web/api.py`（Web API 路由，v0.1.5 新增 temporal/validate/runtime/presets/agent/audit）→ `pages/model-morph/`（前端 SPA）。
-- 设计文档与调研报告见 `开发/`（不提交 git）。
+- 代码结构：`main.py`（Star 入口/钩子/命令）→ `scheduler/`（compat 兼容层 / persistence 持久化 / state 会话状态 / groups 模型组 / rules 规则 / lifecycle 生命周期 / temporal 时间调度 / audit 审计 / agents agent 配置层 / presets 预设 / engine 调度引擎 / logs 日志）→ `web/api.py`（Web API 路由：temporal/validate/runtime/presets/agent/audit）→ `pages/model-morph/`（前端 SPA）。
+<!-- 设计文档与调研报告见 `开发/`（不提交 git），该目录远程分支不可见，故隐藏 -->
 - 运行时接入点：`@filter.on_waiting_llm_request`（Provider 解析前调用 `ProviderManager.set_provider(umo=...)`，与 `/provider` 同款会话隔离机制）；`/new` `/reset` 检测基于 `_clean_group_context_session` extra 标志 + conversation_id 变化双保险。
 
 ## 版本历史
@@ -211,7 +216,8 @@ when/then 规则引擎（10 种条件 + 4 种动作）、会话生命周期（�
 压缩校准）、temporal 时间强制调度、会话隔离与锁定、WebUI 8 视图、AI 配置助手（聊天
 SubAgent + Web 助手）、时间规则视图与冲突检测、审计日志、旧配置自动迁移、AI 助手会话
 持久化、WebChat 模型切换修复；**v1.0.0（首个正式版）** 冻结 0.1.x 全部能力并修复
-WebChat 下插件切换被前端 `selected_provider` 覆盖的问题；**v1.0.2** 聚焦 AI 助手体验
+WebChat 下插件切换被前端 `selected_provider` 覆盖的问题；**v1.0.1** 限定群组（scope）
+补全——标签式群组输入、双主题变量标签框（修复深色主题白底白边）；**v1.0.2** 聚焦 AI 助手体验
 升级——SSE 流式输出、内置 Markdown 渲染（无 CDN、防 XSS）、UMO 理解补全（群号/QQ →
 `platform_id:message_type:session_id` 换算）、规则 vs 生命周期自动消歧、前端 UMO 实时
 预览、工具描述取值枚举补全；**v1.0.3** 让 Agent 完整操作规则引擎（when/then 条件规则
