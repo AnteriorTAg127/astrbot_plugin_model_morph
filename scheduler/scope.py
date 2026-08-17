@@ -73,6 +73,7 @@ def scope_match(scope, meta: dict | None) -> bool:
 
 def parse_scope_text(groups_text: str, users_text: str, sessions_text: str) -> dict:
     """把「逗号分隔」文本解析为 scope 结构（trim / 去空项，供 Web API 使用）。"""
+
     def _split(text) -> list:
         return [p.strip() for p in str(text or "").split(",") if p.strip()]
 

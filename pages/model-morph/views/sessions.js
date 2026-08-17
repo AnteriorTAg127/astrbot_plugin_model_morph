@@ -44,23 +44,45 @@ function paint() {
         row.appendChild(calibTd);
         const lockTd = el("td");
         lockTd.appendChild(s.locked
-            ? el("span", "badge warning", t("pages.model-morph.sessions.lock_target", "锁定到") + " " + (s.lock_group_name || s.lock_provider_model || "—"))
+            ? el("span", "badge warning", lockLabelText(s))
             : el("span", "badge muted", t("pages.model-morph.sessions.lock", "未锁定")));
         row.appendChild(lockTd);
         const actTd = el("td", "cell-actions");
         const lockBtn = el("button", "btn btn-ghost btn-sm", s.locked ? t("pages.model-morph.sessions.unlock", "解锁") : t("pages.model-morph.sessions.lock", "锁定"));
         lockBtn.type = "button";
         lockBtn.addEventListener("click", () => s.locked ? unlock(s.umo) : doLock(s.umo));
+        const lockModelBtn = el("button", "btn btn-ghost btn-sm", t("pages.model-morph.sessions.lock_model", "锁模型"));
+        lockModelBtn.type = "button";
+        lockModelBtn.addEventListener("click", () => doLockModel(s.umo));
         const resetBtn = el("button", "btn btn-ghost btn-sm", t("pages.model-morph.sessions.reset", "重置"));
         resetBtn.type = "button"; resetBtn.addEventListener("click", () => reset(s.umo));
         const detailBtn = el("button", "btn btn-ghost btn-sm", t("pages.model-morph.sessions.detail", "详情"));
         detailBtn.type = "button"; detailBtn.addEventListener("click", () => detailDialog(s));
         const rmBtn = el("button", "btn btn-danger btn-sm", t("pages.model-morph.sessions.remove", "移除"));
         rmBtn.type = "button"; rmBtn.addEventListener("click", () => remove(s.umo));
-        actTd.append(lockBtn, resetBtn, detailBtn, rmBtn);
+        actTd.append(lockBtn, lockModelBtn, resetBtn, detailBtn, rmBtn);
         row.appendChild(actTd);
         body.appendChild(row);
     }
+}
+
+// 锁定列显示：优先用后端生成的 lock_label（组(xxx) / 模型(xxx) / 空）；
+// 缺失 lock_label 时按字段回退（组锁定 → lock_group_name，模型锁定 → provider @ model）。
+function lockLabelText(s) {
+    if (s && s.lock_label) return String(s.lock_label);
+    if (!s || !s.locked) return t("pages.model-morph.sessions.lock", "未锁定");
+    // 模型锁定（lock_provider_id + lock_model）
+    if (s.lock_provider_id && s.lock_model) {
+        return t("pages.model-morph.sessions.lock_model_prefix", "模型") + "(" + s.lock_provider_id + " @ " + s.lock_model + ")";
+    }
+    if (s.lock_provider_id) {
+        // 仅 provider（旧版锁 Provider）
+        return t("pages.model-morph.sessions.lock_model_prefix", "模型") + "(" + (s.lock_provider_model || s.lock_provider_id) + ")";
+    }
+    if (s.lock_group_id) {
+        return t("pages.model-morph.sessions.lock_group_prefix", "组") + "(" + (s.lock_group_name || s.lock_group_id) + ")";
+    }
+    return t("pages.model-morph.sessions.lock_target", "锁定到") + " " + "—";
 }
 
 async function load() {
@@ -187,6 +209,54 @@ async function doLock(umo) {
     try {
         await bridge.apiPost("sessions/lock", { umo, group_id: pick.group_id, provider_id: pick.provider_id });
         showToast(t("pages.model-morph.common.save_success", "已保存"), "success");
+        await load();
+    } catch (e) {
+        showToast(e.message || "未知错误", "error");
+    }
+}
+
+// 锁模型弹窗：选择 Provider + 输入 model 名（强锁，优先级最高，与 Lock/Unlock 并存）。
+function lockModelDialog(umo) {
+    return new Promise((resolve) => {
+        const mask = el("div", "modal-mask");
+        const card = el("div", "modal-card");
+        card.appendChild(el("div", "modal-title", t("pages.model-morph.sessions.lock_model", "锁模型")));
+        const pSel = buildProviderSelect("");
+        card.appendChild(lbField(t("pages.model-morph.groups.provider", "Provider"), pSel));
+        const modelInp = document.createElement("input");
+        modelInp.type = "text";
+        modelInp.className = "input";
+        modelInp.placeholder = t("pages.model-morph.sessions.lock_model_name_hint", "目标模型名，如 gpt-5-mini");
+        card.appendChild(lbField(t("pages.model-morph.sessions.lock_model_name", "模型名"), modelInp));
+        card.appendChild(el("div", "hint", t("pages.model-morph.sessions.lock_model_hint", "优先级最高，覆盖规则/关键词/时段规则")));
+        const actions = el("div", "modal-actions");
+        const cancel = el("button", "btn btn-ghost", t("pages.model-morph.common.cancel", "取消"));
+        cancel.type = "button"; cancel.addEventListener("click", () => { mask.remove(); resolve(null); });
+        const ok = el("button", "btn btn-primary", t("pages.model-morph.common.confirm", "确认"));
+        ok.type = "button"; ok.addEventListener("click", () => {
+            const provider_id = pSel.value;
+            const model = modelInp.value.trim();
+            mask.remove();
+            resolve({ provider_id, model });
+        });
+        actions.append(cancel, ok);
+        card.appendChild(actions);
+        mask.appendChild(card);
+        document.body.appendChild(mask);
+    });
+}
+
+async function doLockModel(umo) {
+    const pick = await lockModelDialog(umo);
+    if (!pick) return;
+    if (!pick.provider_id || !pick.model) {
+        showToast(t("pages.model-morph.sessions.need_lock_model", "请选择 Provider 并输入模型名"), "error");
+        return;
+    }
+    try {
+        // 契约 C6：sessions/lock body 兼容旧字段（umo/group_id/provider_id），新增 model。
+        await bridge.apiPost("sessions/lock", { umo, provider_id: pick.provider_id, model: pick.model });
+        showToast(t("pages.model-morph.sessions.lock_model_done", "已锁模型"), "success");
         await load();
     } catch (e) {
         showToast(e.message || "未知错误", "error");

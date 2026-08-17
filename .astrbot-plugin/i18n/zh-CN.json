@@ -90,7 +90,8 @@
         "temporal_rule_count": "时段规则",
         "calibration_sessions": "校准中会话",
         "default_lifecycle": "默认生命周期",
-        "no_default_lifecycle": "未设置"
+        "no_default_lifecycle": "未设置",
+        "force_lock_label": "当前生效强锁"
       },
       "groups": {
         "title": "模型组",
@@ -171,7 +172,17 @@
         "action_switch_group": "切换到模型组",
         "action_switch_provider": "直选 Provider",
         "action_apply_lifecycle": "应用生命周期",
-        "action_unlock": "解锁会话锁定"
+        "action_unlock": "解锁会话锁定",
+        "cond_model_keyword": "模型名关键词",
+        "action_replace_model": "替换模型名",
+        "model_kw_keywords": "关键词",
+        "model_kw_kw_hint": "回车添加，逗号/换行分隔",
+        "model_kw_mode": "匹配模式",
+        "mode_all": "包含全部 (all)",
+        "mode_any": "包含任一 (any)",
+        "mode_min_n": "至少 N 个 (min_n)",
+        "replace_model_model": "目标模型",
+        "replace_model_model_hint": "目标模型名，如 gpt-5-mini"
       },
       "temporal": {
         "title": "时间调度规则",
@@ -293,7 +304,15 @@
         "last_switch": "最近切换",
         "cursor": "组游标",
         "trace": "决策轨迹",
-        "lock_target": "锁定到"
+        "lock_target": "锁定到",
+        "lock_model": "锁模型",
+        "lock_model_prefix": "模型",
+        "lock_group_prefix": "组",
+        "lock_model_name": "模型名",
+        "lock_model_name_hint": "目标模型名，如 gpt-5-mini",
+        "lock_model_hint": "优先级最高，覆盖规则/关键词/时段规则",
+        "need_lock_model": "请选择 Provider 并输入模型名",
+        "lock_model_done": "已锁模型"
       },
       "logs": {
         "title": "调度日志",
@@ -404,6 +423,17 @@
         "apply_fail": "应用失败",
         "rollback_fail": "撤销失败",
         "rolled_back": "已撤销修改",
+        "approve": "批准",
+        "reject": "拒绝",
+        "approve_fail": "批准失败",
+        "reject_fail": "拒绝失败",
+        "approved": "已批准生效",
+        "rejected": "已拒绝该更改",
+        "pending_approval_title": "待审批的更改",
+        "pending_id_label": "暂存编号",
+        "staged_at_label": "暂存时间",
+        "expand_raw": "展开查看原始数据",
+        "change_badge": "变更",
         "pending_title": "待应用的更改（预览）",
         "confirm_pending": "有未应用的更改，继续对话将保留预览，是否继续？",
         "before": "修改前",
@@ -424,7 +454,9 @@
         "updated_at": "更新",
         "no_title": "未命名会话",
         "created_at": "创建",
-        "last_preview": "预览"
+        "last_preview": "预览",
+        "task_interrupted": "上一轮生成被中断，正在后台继续，完成后可在会话中查看。",
+        "task_interrupted_toast": "检测到生成任务进行中或被中断，请稍候再试"
       },
       "wizard": {
         "title": "调度规则配置向导",

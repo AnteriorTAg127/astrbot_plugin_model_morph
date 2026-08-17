@@ -90,7 +90,8 @@
         "temporal_rule_count": "Temporal rules",
         "calibration_sessions": "Calibrating sessions",
         "default_lifecycle": "Default lifecycle",
-        "no_default_lifecycle": "Not set"
+        "no_default_lifecycle": "Not set",
+        "force_lock_label": "Active force lock"
       },
       "groups": {
         "title": "Model Groups",
@@ -171,7 +172,17 @@
         "action_switch_group": "Switch to group",
         "action_switch_provider": "Set provider",
         "action_apply_lifecycle": "Apply lifecycle",
-        "action_unlock": "Unlock session"
+        "action_unlock": "Unlock session",
+        "cond_model_keyword": "Model name keyword",
+        "action_replace_model": "Replace model name",
+        "model_kw_keywords": "Keywords",
+        "model_kw_kw_hint": "Press Enter to add; comma or newline separated",
+        "model_kw_mode": "Match mode",
+        "mode_all": "Contains all (all)",
+        "mode_any": "Contains any (any)",
+        "mode_min_n": "At least N (min_n)",
+        "replace_model_model": "Target model",
+        "replace_model_model_hint": "Target model name, e.g. gpt-5-mini"
       },
       "temporal": {
         "title": "Time Scheduling Rules",
@@ -293,7 +304,15 @@
         "last_switch": "Last switch",
         "cursor": "Group cursor",
         "trace": "Decision trace",
-        "lock_target": "Locked to"
+        "lock_target": "Locked to",
+        "lock_model": "Lock model",
+        "lock_model_prefix": "Model",
+        "lock_group_prefix": "Group",
+        "lock_model_name": "Model name",
+        "lock_model_name_hint": "Target model name, e.g. gpt-5-mini",
+        "lock_model_hint": "Highest priority, overrides rules/keywords/time rules",
+        "need_lock_model": "Select a provider and enter a model name",
+        "lock_model_done": "Model locked"
       },
       "logs": {
         "title": "Scheduler Logs",
@@ -404,6 +423,17 @@
         "apply_fail": "Apply failed",
         "rollback_fail": "Undo failed",
         "rolled_back": "Changes undone",
+        "approve": "Approve",
+        "reject": "Reject",
+        "approve_fail": "Approve failed",
+        "reject_fail": "Reject failed",
+        "approved": "Approved and applied",
+        "rejected": "Change rejected",
+        "pending_approval_title": "Changes awaiting approval",
+        "pending_id_label": "Pending ID",
+        "staged_at_label": "Staged at",
+        "expand_raw": "Expand to view raw data",
+        "change_badge": "Change",
         "pending_title": "Pending changes (preview)",
         "confirm_pending": "There are un-applied changes. Continuing the conversation keeps the preview. Continue?",
         "before": "Before",
@@ -424,7 +454,9 @@
         "updated_at": "Updated",
         "no_title": "Untitled chat",
         "created_at": "Created",
-        "last_preview": "Preview"
+        "last_preview": "Preview",
+        "task_interrupted": "The previous generation was interrupted and is continuing in the background. It will appear in this chat once finished.",
+        "task_interrupted_toast": "A generation task is in progress or was interrupted. Please wait and retry."
       },
       "wizard": {
         "title": "Schedule Rule Wizard",

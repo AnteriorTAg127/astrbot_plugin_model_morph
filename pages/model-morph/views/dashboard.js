@@ -116,8 +116,7 @@ function buildErrorTable(errors) {
     box.appendChild(wrap);
 }
 
-// 当前生效时段规则卡片：读 dashboard API 的 active_temporal_rules。
-// 后端引擎 dashboard() 输出扁平字段：{id,name,kind,group_id,source_provider,target_provider,
+// 当前生效时段规则卡片：读 dashboard API 的 active_temporal_rules。// 后端引擎 dashboard() 输出扁平字段：{id,name,kind,group_id,source_provider,target_provider,
 //       target_group,schedule_type,start,end,priority}（schedule 已展开为 *_start/*_end），
 // 故此处读取 schedule_type / schedule_start / schedule_end。最多 20 条。
 function buildTemporalRules(rules) {
@@ -176,6 +175,36 @@ function buildTemporalRules(rules) {
     box.appendChild(wrap);
 }
 
+// 当前生效强锁摘要行（v1.0.3）。
+// 无强锁 → 隐藏；有强锁 → 显示「当前生效强锁：umo → provider @ model」。
+// force_lock 兼容两种形态：
+//   - 字符串 "umo → provider @ model"（后端已格式化）
+//   - 对象 {umo, provider_id, model}
+function buildForceLock(forceLock) {
+    const box = document.getElementById("dashForceLock");
+    if (!box) return;
+    if (!forceLock) { box.style.display = "none"; return; }
+    let text = "";
+    if (typeof forceLock === "string") {
+        text = forceLock;
+    } else if (forceLock && typeof forceLock === "object") {
+        const umo = forceLock.umo || "";
+        const p = forceLock.provider_id || "";
+        const m = forceLock.model || "";
+        const pair = (p && m) ? `${p} @ ${m}` : (p || m || "—");
+        text = (umo ? `${umo} → ${pair}` : pair);
+    } else {
+        text = "—";
+    }
+    box.style.display = "flex";
+    const icon = el("span", "force-lock-icon", "🔒");
+    const body = el("span", "force-lock-body",
+        t("pages.model-morph.dashboard.force_lock_label", "当前生效强锁") + "：" + text);
+    box.replaceChildren();
+    box.appendChild(icon);
+    box.appendChild(body);
+}
+
 // 加载总览并渲染
 async function load() {
     const seq = ++renderSeq;
@@ -185,6 +214,7 @@ async function load() {
         const d = await bridge.apiGet("dashboard");
         if (seq !== renderSeq) return; // 丢弃过期响应
         buildStats(d);
+        buildForceLock(d.force_lock);
         buildTemporalRules(d.active_temporal_rules);
         buildSwitchTable(d.recent_switches);
         buildErrorTable(d.recent_errors);

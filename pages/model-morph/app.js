@@ -93,11 +93,11 @@ function switchScope(scope) {
         const nav = document.querySelector(sel);
         if (nav) nav.classList.toggle("hidden", key !== scope);
     }
-    // 若当前 tab 不属于该 scope，激活该 scope 首个 tab
-    if (TAB_TO_SCOPE[currentTab] !== scope) {
-        const first = document.querySelector(`${SCOPE_NAV[scope]} .tab`);
-        if (first) activateTab(first.dataset.tab);
-    }
+    // 注意：不再在此 `activateTab` 该 scope 首个 tab。分区/页面的切换统一由
+    // hash 路由（scope 按钮 / tab 点击 / 规则「模拟」都改写 location.hash →
+    // hashchange → handleHash → switchScope + activateTab(route)）驱动，
+    // 因为路由目标是确定的那个 tab。若 switchScope 内再激活首 tab，会造成
+    // 跨分区跳转时的二次激活与重复加载（如从「规则」跳「模拟器」会先闪「AI 助手」）。
 }
 
 async function activateTab(name, { forceReload = false } = {}) {
@@ -140,13 +140,21 @@ async function init() {
     for (const name of Object.keys(VIEWS)) {
         if (VIEWS[name].bind) VIEWS[name].bind();
     }
-    // tab 点击 → 切换（所属 scope 隐式由 TAB_TO_SCOPE 决定）
+    // tab 点击 → 改写 hash，由 hashchange → handleHash 统一驱动 switchScope + activateTab。
+    // 这样 hash 永远与当前实际视图一致：规则「模拟」按钮据此判断是否已停留在模拟器页，
+    // 避免「先跳模拟器 → tab 切回规则（旧代码不改 hash）→ 再点模拟」时 hash 与视图脱节而失效。
     document.querySelectorAll(".tab").forEach((tab) => {
-        tab.addEventListener("click", () => activateTab(tab.dataset.tab));
+        tab.addEventListener("click", () => {
+            window.location.hash = "#/" + tab.dataset.tab;
+        });
     });
-    // scope 按钮点击 → 切换分区（自动激活该分区首个 tab）
+    // scope 按钮点击 → 跳转该分区首个 tab（同样走 hash 路由）。已在本分区时保持当前 tab 不动。
     document.querySelectorAll(".scope-btn").forEach((b) => {
-        b.addEventListener("click", () => switchScope(b.dataset.scope));
+        b.addEventListener("click", () => {
+            if (b.dataset.scope === currentScope) return;
+            const first = document.querySelector(`${SCOPE_NAV[b.dataset.scope]} .tab`);
+            window.location.hash = "#/" + (first ? first.dataset.tab : "dashboard");
+        });
     });
     window.addEventListener("hashchange", handleHash);
     window.addEventListener("resize", () => {

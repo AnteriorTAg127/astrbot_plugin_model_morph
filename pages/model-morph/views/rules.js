@@ -4,15 +4,15 @@
 //   - WHEN 条件行编辑器（类型下拉 + 参数表单 + 删行）
 //   - AND/OR 切换
 //   - scope 六列表单
-//   - THEN 动作（switch_group / switch_provider / apply_lifecycle / unlock）+ 参数
+//   - THEN 动作（switch_group / switch_provider / apply_lifecycle / unlock / replace_model）+ 参数
 // 每条规则「模拟」按钮 → 跳到模拟器并预填。
 // 全部动态文本走 textContent / el()，防 XSS；删除走 confirmDialog()。
 // ==========================================================================
 import { bridge, t, el, showToast, confirmDialog } from "../common.js";
 import { refData, buildProviderSelect, buildGroupSelect, buildLifecycleSelect } from "./shared.js";
 
-const COND_TYPES = ["time_range", "date_weekday", "scope", "keyword", "command", "at_bot", "message_type", "round_gte", "context_length_gte", "lifecycle_event"];
-const ACTIONS = ["switch_group", "switch_provider", "apply_lifecycle", "unlock"];
+const COND_TYPES = ["time_range", "date_weekday", "scope", "keyword", "command", "at_bot", "message_type", "round_gte", "context_length_gte", "lifecycle_event", "model_keyword"];
+const ACTIONS = ["switch_group", "switch_provider", "apply_lifecycle", "unlock", "replace_model"];
 
 let seq = 0;
 let draft = null;
@@ -96,16 +96,24 @@ async function load() {
     }
 }
 
-// 模拟：跳到模拟器页并设置预填（路由在 app.js 中切换）。
-// 若已在模拟器页，hash 不会变化而触发 reload，故额外派发自定义事件让模拟器重新预填。
+// 模拟：设置 pending，然后跳转模拟器并让它预填。
+// 跳转走 hash 路由（app.js 中 tab/scope/模拟统一由 hashchange → handleHash 驱动，
+// hash 与当前实际视图保持一致）。
+// 判断「是否已在模拟器页」依据当前可见页面（#page-simulator.active）而非 hash：
+// 旧实现用 hash 判断，在「先跳模拟器 → tab 切回规则（当时 tab 点击不改 hash）→ 再点模拟」
+// 时会出现 hash 仍是 #/simulator 而实际视图已是规则页的脱节，导致误判「已在模拟器」、
+// 只派发事件不切页，表现为按钮失效。
 let pendingSimRule = null;
 function prepopulateSim(rule) {
     pendingSimRule = rule;
-    const already = (window.location.hash || "").replace(/^#\/?/, "") === "simulator";
-    window.location.hash = "#/simulator";
-    if (already) {
+    const simVisible = document.getElementById("page-simulator")?.classList.contains("active");
+    if (simVisible) {
+        // 已在模拟器页（可见）：hash 不会变化而不触发路由，额外派发事件让模拟器重新预填当前规则。
         window.dispatchEvent(new CustomEvent("mm-simulate-request", { detail: rule }));
+        return;
     }
+    // 未在模拟器页：改写 hash → hashchange → handleHash 做 scope 切换 + 切页 + 加载（消费 pending 预填）。
+    window.location.hash = "#/simulator";
 }
 
 // 供 simulator 视图消费
@@ -247,6 +255,7 @@ function renderEditor() {
         draft.then.group_id = "";
         draft.then.provider_id = "";
         draft.then.lifecycle_id = "";
+        draft.then.model = "";
         renderEditor();
     });
     const actionF = el("div", "form-field");
@@ -302,6 +311,24 @@ function buildThenParams() {
     } else if (action === "unlock") {
         // unlock 无参数
         wrap.appendChild(el("div", "hint", t("pages.model-morph.rules.action_unlock", "解锁会话锁定")));
+    } else if (action === "replace_model") {
+        // replace_model：Provider 下拉 + 模型名文本输入
+        const pSel = buildProviderSelect(draft.then.provider_id);
+        pSel.addEventListener("change", () => { draft.then.provider_id = pSel.value; });
+        const fP = el("div", "form-field");
+        fP.appendChild(el("label", null, t("pages.model-morph.groups.provider", "Provider")));
+        fP.appendChild(pSel);
+        wrap.appendChild(fP);
+        const modelInp = document.createElement("input");
+        modelInp.type = "text";
+        modelInp.className = "input";
+        modelInp.value = draft.then.model || "";
+        modelInp.placeholder = t("pages.model-morph.rules.replace_model_model_hint", "目标模型名，如 gpt-5-mini");
+        modelInp.addEventListener("input", () => { draft.then.model = modelInp.value; });
+        const fM = el("div", "form-field");
+        fM.appendChild(el("label", null, t("pages.model-morph.rules.replace_model_model", "目标模型")));
+        fM.appendChild(modelInp);
+        wrap.appendChild(fM);
     }
     return wrap;
 }
@@ -324,7 +351,7 @@ function buildConditionRow(idx) {
     });
     row.appendChild(typeSel);
     const params = el("div", "cond-params");
-    buildCondParams(cond, params);
+    buildCondParams(cond, params, renderEditor);
     row.appendChild(params);
     const rm = el("button", "btn btn-danger btn-sm", t("pages.model-morph.common.delete", "删除"));
     rm.type = "button";
@@ -337,7 +364,7 @@ function buildConditionRow(idx) {
     return row;
 }
 
-function buildCondParams(cond, params) {
+function buildCondParams(cond, params, onRefresh) {
     const addLabel = (s) => params.appendChild(el("span", "cond-param-hint", s));
     const addInput = (cls, value, onChange, type = "text", ph) => {
         const inp = document.createElement("input");
@@ -413,9 +440,98 @@ function buildCondParams(cond, params) {
                 ["reset", t("pages.model-morph.simulator.event_reset", "重置 (reset)")],
             ], cond.event, (v) => { cond.event = v; });
             break;
+        case "model_keyword":
+            // 关键词（多值，逗号/换行/回车分隔，标签式输入）
+            addLabel(t("pages.model-morph.rules.model_kw_keywords", "关键词"));
+            const kwBox = buildModelKeywordInput(cond, (next) => { cond.keywords = next; });
+            params.appendChild(kwBox);
+            // mode 下拉
+            addLabel(t("pages.model-morph.rules.model_kw_mode", "匹配模式"));
+            addSelect([
+                ["all", t("pages.model-morph.rules.mode_all", "包含全部 (all)")],
+                ["any", t("pages.model-morph.rules.mode_any", "包含任一 (any)")],
+                ["min_n", t("pages.model-morph.rules.mode_min_n", "至少 N 个 (min_n)")],
+            ], cond.mode, (v) => {
+                cond.mode = v;
+                // 切换 min_n → 需要重渲染以显示/隐藏 min_n 输入框
+                if (typeof onRefresh === "function") onRefresh();
+            });
+            // min_n：mode=min_n 时显示 1..len(keywords)
+            const minNField = el("span", "cond-minn-wrap");
+            if (cond.mode === "min_n") {
+                minNField.appendChild(buildMinNInput(cond));
+            }
+            params.appendChild(minNField);
+            break;
         default:
             break;
     }
+}
+
+// model_keyword 关键词输入：标签式（回车追加 / × 删除 / Backspace 删除最后一个）。
+function buildModelKeywordInput(cond, onChange) {
+    const box = el("div", "cond-tag-input");
+    const chipsRow = el("div", "cond-tag-chips");
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "cond-param";
+    input.placeholder = t("pages.model-morph.rules.model_kw_kw_hint", "回车添加，逗号/换行分隔");
+    let values = (Array.isArray(cond.keywords) ? cond.keywords : []).slice();
+
+    const emit = () => onChange(values.slice());
+    const renderChips = () => {
+        chipsRow.replaceChildren();
+        for (const v of values) {
+            const chip = el("span", "cond-tag-chip", v);
+            const del = el("button", "cond-tag-chip-x", "×");
+            del.type = "button";
+            del.addEventListener("click", () => {
+                values = values.filter((x) => x !== v);
+                emit(); renderChips();
+            });
+            chip.appendChild(del);
+            chipsRow.appendChild(chip);
+        }
+    };
+    const addChip = (raw) => {
+        // 兼容逗号/换行分隔，逐个去空白去重
+        const parts = String(raw || "").split(/[,，\n]/).map((x) => x.trim()).filter(Boolean);
+        for (const v of parts) { if (v && !values.includes(v)) values.push(v); }
+        if (parts.length) emit();
+        renderChips();
+    };
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === "," || e.key === "，") {
+            e.preventDefault();
+            addChip(input.value); input.value = "";
+        } else if (e.key === "Backspace" && !input.value) {
+            if (values.length) { values.pop(); emit(); renderChips(); }
+        }
+    });
+    input.addEventListener("blur", () => {
+        if (input.value.trim()) { addChip(input.value); input.value = ""; }
+    });
+    box.appendChild(chipsRow);
+    box.appendChild(input);
+    renderChips();
+    return box;
+}
+
+// min_n 数字输入（1..关键词数）。
+function buildMinNInput(cond) {
+    const inp = document.createElement("input");
+    inp.type = "number";
+    inp.min = "1";
+    inp.max = String(Math.max(1, (cond.keywords || []).length));
+    inp.className = "cond-param";
+    inp.value = String(cond.min_n != null ? cond.min_n : 1);
+    inp.addEventListener("change", () => {
+        const n = Number(inp.value);
+        const max = Math.max(1, (cond.keywords || []).length);
+        cond.min_n = Math.min(Math.max(Number.isNaN(n) ? 1 : n, 1), max);
+        inp.value = String(cond.min_n);
+    });
+    return inp;
 }
 
 function freshConditionFor(type) {
@@ -430,6 +546,7 @@ function freshConditionFor(type) {
         case "round_gte": return { type, value: 0 };
         case "context_length_gte": return { type, value: 0 };
         case "lifecycle_event": return { type, event: "new" };
+        case "model_keyword": return { type, keywords: [], mode: "any", min_n: 1 };
         default: return { type };
     }
 }

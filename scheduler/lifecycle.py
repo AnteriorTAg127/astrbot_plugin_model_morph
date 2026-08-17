@@ -229,9 +229,7 @@ class LifecycleEngine:
     def _ordered_enabled(self) -> list[dict]:
         """返回启用策略，按 priority 降序（同 priority 保持存储顺序）。"""
         items = [
-            normalize_lifecycle(i)
-            for i in self._raw_list()
-            if i.get("enabled", True)
+            normalize_lifecycle(i) for i in self._raw_list() if i.get("enabled", True)
         ]
         return sorted(
             items, key=lambda i: (int(i.get("priority", 0) or 0),), reverse=True

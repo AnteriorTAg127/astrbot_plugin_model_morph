@@ -24,6 +24,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 # 注意：AstrBot 以包形式加载插件（data.plugins.astrbot_plugin_model_morph），
 # 插件目录不在 sys.path 上，因此包内导入必须使用相对导入。
+from .scheduler import agent_tools
 from .scheduler import compat
 from .scheduler.agent import ModelMorphConfigAgentTool
 from .scheduler.agent_tools import ToolContext
@@ -56,7 +57,7 @@ except Exception:  # noqa: BLE001
     "astrbot_plugin_model_morph",
     "ModelMorph",
     "模型自动调度器：按时间/会话/规则自动切换 LLM Provider",
-    "1.0.2",
+    "1.0.3",
 )
 class ModelMorph(Star):
     """模型自动调度器：按会话（UMO）隔离地自动切换聊天 Provider。
@@ -480,12 +481,61 @@ class ModelMorph(Star):
             f"已锁定本会话到模型组: {target['name'] or target['id']}"
         )
 
+    @scheduler.command("lockmodel")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def scheduler_lockmodel(
+        self, event: AstrMessageEvent, provider: str, model: str
+    ):
+        """强锁本会话到指定 Provider 的模型名（优先级最高，规则/关键词/temporal 均不覆盖）。
+
+        AstrBot 指令按空格分词，因此模型名不支持空格；如模型名确含空格请改用
+        WebUI 配置或重命名模型。管理员指令。
+
+        Args:
+            provider: Provider 实例 id（须存在于 AstrBot）。
+            model: 目标模型名（不含空格）。
+        """
+        umo = event.unified_msg_origin
+        provider = (provider or "").strip()
+        model = (model or "").strip()
+        if not model:
+            yield event.plain_result(
+                "用法：/scheduler lockmodel <provider_id> <model_name>（模型名不含空格）"
+            )
+            return
+        if provider not in self.adapter.provider_ids():
+            yield event.plain_result(f"未找到 Provider: {provider}")
+            return
+        # 强锁模型取代锁组：同时清空 lock_group_id，保留 lock_provider_id + lock_model 成对。
+        await self.states.update(
+            umo,
+            lock_group_id=None,
+            lock_provider_id=provider,
+            lock_model=model,
+        )
+        self.slog.add(
+            {
+                "time": datetime.now().isoformat(),
+                "umo": umo,
+                "type": "lock_model",
+                "provider": provider,
+                "model": model,
+                "reason": "指令强锁模型",
+            }
+        )
+        yield event.plain_result(
+            f"已强制锁定本会话到模型: {provider} @ {model}（优先级最高，"
+            "规则/关键词/temporal 均不覆盖）"
+        )
+
     @scheduler.command("unlock")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def scheduler_unlock(self, event: AstrMessageEvent):
-        """解除本会话锁定，恢复自动调度。管理员指令。"""
+        """解除本会话锁定（含强锁模型），恢复自动调度。管理员指令。"""
         umo = event.unified_msg_origin
-        await self.states.update(umo, lock_group_id=None, lock_provider_id=None)
+        await self.states.update(
+            umo, lock_group_id=None, lock_provider_id=None, lock_model=None
+        )
         self.slog.add(
             {
                 "time": datetime.now().isoformat(),
@@ -511,6 +561,75 @@ class ModelMorph(Star):
             }
         )
         yield event.plain_result("已重置本会话调度状态（round=0）。")
+
+    @scheduler.command("approve")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def scheduler_approve(self, event: AstrMessageEvent, pending_id: str = ""):
+        """批准暂存的配置变更并应用到 config（无参数 = 批准当前唯一暂存）。管理员指令。
+
+        应用与审计逻辑复用 ``agent_tools.apply_staged``（契约 C8），本指令只负责
+        文本回复与异常兜底。
+
+        Args:
+            pending_id: 可选的暂存 id（如 ``p_ab12``）。
+        """
+        try:
+            result = agent_tools.apply_staged(self.tool_ctx, pending_id)
+        except Exception as exc:  # noqa: BLE001 - 应用异常兜底，不让指令崩溃
+            logger.exception("ModelMorph.scheduler_approve 异常")
+            yield event.plain_result(f"批准异常：{exc}")
+            return
+        if not result.get("ok"):
+            yield event.plain_result(f"批准失败：{result.get('error', '未知错误')}")
+            return
+        lines = [f"已应用 {result.get('applied', 0)} 项变更："]
+        lines += [f"- {s}" for s in (result.get("summary") or [])]
+        yield event.plain_result("\n".join(lines))
+
+    @scheduler.command("reject")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def scheduler_reject(self, event: AstrMessageEvent, pending_id: str = ""):
+        """放弃暂存的配置变更（无参数 = 放弃当前唯一暂存）。管理员指令。
+
+        丢弃逻辑复用 ``agent_tools.reject_staged``（契约 C8），本指令只负责文本
+        回复与异常兜底。
+
+        Args:
+            pending_id: 可选的暂存 id（如 ``p_ab12``）。
+        """
+        try:
+            result = agent_tools.reject_staged(self.tool_ctx, pending_id)
+        except Exception as exc:  # noqa: BLE001 - 放弃异常兜底
+            logger.exception("ModelMorph.scheduler_reject 异常")
+            yield event.plain_result(f"放弃异常：{exc}")
+            return
+        if not result.get("ok"):
+            yield event.plain_result(f"放弃失败：{result.get('error', '未知错误')}")
+            return
+        target = pending_id or "（当前暂存）"
+        yield event.plain_result(f"已放弃暂存的变更：{target}")
+
+    @scheduler.command("pending")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def scheduler_pending(self, event: AstrMessageEvent):
+        """查看当前待审批的暂存变更概览（id + 摘要 + 时间）。管理员指令。"""
+        try:
+            view = agent_tools.pending_view(self.tool_ctx)
+        except Exception as exc:  # noqa: BLE001 - 读取异常兜底
+            logger.exception("ModelMorph.scheduler_pending 异常")
+            yield event.plain_result(f"读取暂存失败：{exc}")
+            return
+        if not view:
+            yield event.plain_result("当前没有待审批的暂存变更。")
+            return
+        pid = view.get("pending_id", "")
+        staged_at = view.get("staged_at") or ""
+        lines = ["以下变更等待管理员审批：", f"[{pid}] 时间：{staged_at}"]
+        lines += [f"- {s}" for s in (view.get("summary") or [])]
+        lines.append(
+            f"执行 /scheduler approve {pid} 批准，或 /scheduler reject {pid} 放弃"
+        )
+        yield event.plain_result("\n".join(lines))
 
     # ------------------------------------------------------------------ #
     # 状态文本辅助
@@ -549,8 +668,16 @@ class ModelMorph(Star):
             lines.append(f"- 轮数(round): {state.round}")
             lines.append(f"- 生命周期阶段: {state.stage}")
             lines.append(f"- 生命周期策略: {state.lifecycle_id or '(未绑定)'}")
-            lock = state.lock_group_id or state.lock_provider_id
-            lines.append(f"- 锁定: {'是' if lock else '否'}")
+            if state.lock_provider_id and state.lock_model:
+                lines.append(
+                    f"- 锁定: 模型({state.lock_provider_id} @ {state.lock_model})"
+                )
+            elif state.lock_group_id:
+                g_lock = self.groups.get(state.lock_group_id)
+                lock_name = g_lock.get("name") if g_lock else ""
+                lines.append(f"- 锁定: 组({lock_name or state.lock_group_id})")
+            else:
+                lines.append("- 锁定: 否")
             lines.append(f"- 最近命中规则: {state.last_rule_id or '(无)'}")
         else:
             lines.append("- 当前 Provider: (读取状态失败)")
@@ -559,6 +686,16 @@ class ModelMorph(Star):
     async def _model_text(self, event: AstrMessageEvent) -> str:
         """组装 /scheduler model 的文本回复（Provider + 模型名）。"""
         umo = event.unified_msg_origin
+        # 强锁模型时直接展示锁定的 Provider @ 模型名（优先级最高的事实模型）。
+        try:
+            state = await self.states.get(umo)
+        except Exception:  # noqa: BLE001 - 状态读取失败按未锁定处理
+            state = None
+        if state is not None and state.lock_provider_id and state.lock_model:
+            return (
+                f"当前 Provider: {state.lock_provider_id}\n"
+                f"当前模型(锁定): {state.lock_provider_id} @ {state.lock_model}"
+            )
         cur_provider = self.adapter.current_provider_id(umo)
         model_name = ""
         try:
