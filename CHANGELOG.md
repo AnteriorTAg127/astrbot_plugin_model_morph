@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.4] - 2026-08-23
+
+### Fixed
+
+- **🐛 修复「规则引擎新建规则后无法删除/复制（提示『缺少规则 id』）」**：WebUI 新建规则时前端携带 `id: ""`，而后端 `normalize_rule` 用 `setdefault` 只能补缺失键、无法覆盖已存在的空串，导致空 id 规则入库——删除/复制报「缺少规则 id」，再次编辑还会**静默复制出新规则**且旧规则永远无法在 UI 清理。修复与同族缺陷一并处理：
+  - `normalize_rule` 将空白/非字符串 id 一律重新生成；`temporal` 时间调度规则的 `normalize_temporal_rule` 同样处理（Agent spec 携带空 id 时不再入库死规则）；
+  - `rules / temporal / groups / lifecycle` 四个更新路径合并 `raw` 后**强制以参数 id 为身份字段**：更新载荷携带空/异 id 不再「改名换姓」（此前 `groups`/`lifecycle` 会生成全新 id，导致生命周期绑定、组引用等旧引用全部失效）；
+  - 存量已入库的空 id 实体：`ConfigStore.load() / import_all()` 经 `migrate.ensure_entity_ids` 自动补齐真实 id 并落盘（读时自愈，无需手改配置）；
+  - 前端 `rules / groups / lifecycles` 保存时剔除空 id 键（双保险；`temporal` 原本已剔除）。
+- **🛡️ 规则优先级类型加固**：`normalize_rule` 将 `priority` 强转 int（非法回 0），避免字符串 priority 导致 `list_()` 排序 `TypeError`、进而整个规则引擎报错/静默失效。
+- 测试：新增 `tests/test_rule_id_regression.py`（17 条：建→列→删全链路、更新身份保护、存量自愈、Web 端点端到端）；全量 **542 个离线用例通过**，ruff 全绿。
+
 ## [1.0.3] - 2026-08-18
 
 ### Added

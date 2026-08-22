@@ -205,22 +205,26 @@ class LifecycleEngine:
         """读取 store 中的 lifecycles 原始列表。"""
         return self._store.get_lifecycles()
 
+    def _normalized_list(self) -> list[dict]:
+        """读取 lifecycles 并逐条 normalize（读时自愈：存量空 id 条目补真实 id）。"""
+        return [normalize_lifecycle(i) for i in self._raw_list()]
+
     def _save(self, items: list[dict]) -> None:
         """写入 lifecycles 列表到 store。"""
         self._store.update("lifecycles", items)
 
     def get(self, lifecycle_id: str) -> dict | None:
-        """按 id 获取生命周期；不存在返回 None。"""
-        for item in self._raw_list():
+        """按 id 获取生命周期（规范化深拷贝）；不存在返回 None。"""
+        for item in self._normalized_list():
             if item.get("id") == lifecycle_id:
-                return copy.deepcopy(item)
+                return item
         return None
 
     def list_(self, only_enabled: bool = False) -> list[dict]:
-        """返回全部（或仅启用）生命周期列表。"""
+        """返回全部（或仅启用）生命周期列表（规范化深拷贝）。"""
         return [
             copy.deepcopy(i)
-            for i in self._raw_list()
+            for i in self._normalized_list()
             if not only_enabled or i.get("enabled", True)
         ]
 
@@ -270,21 +274,25 @@ class LifecycleEngine:
     def update(self, lifecycle_id: str, raw: dict) -> dict | None:
         """按 id 合并更新；不存在返回 None。
 
+        生命周期 id 是身份字段，恒以 ``lifecycle_id`` 参数为准，不允许被 ``raw``
+        中的 ``id`` 字段覆盖（防「更新载荷带空 id → 生命周期改名换姓」）。
+
         以 ``raw`` 覆盖同名字段，保留版本内未提及字段的既有值。
         """
-        items = self._raw_list()
+        items = self._normalized_list()
         for i, item in enumerate(items):
             if item.get("id") == lifecycle_id:
                 merged = dict(item)
                 merged.update(raw if isinstance(raw, dict) else {})
+                merged["id"] = lifecycle_id
                 items[i] = normalize_lifecycle(merged)
                 self._save(items)
                 return copy.deepcopy(items[i])
         return None
 
     def delete(self, lifecycle_id: str) -> bool:
-        """删除指定生命周期；成功返回 True，不存在返回 False。"""
-        items = self._raw_list()
+        """删除指定生命周期；成功返回 True，不存在返回 False（写回时顺带自愈存量空 id）。"""
+        items = self._normalized_list()
         kept = [i for i in items if i.get("id") != lifecycle_id]
         if len(kept) == len(items):
             return False

@@ -432,8 +432,8 @@ def test_new_commands_have_admin_permission():
         assert block in src, f"scheduler_{cmd} 缺少权限装饰器或装饰器顺序不对"
 
 
-def test_register_version_1_0_3():
-    """@register 版本号更新为 1.0.3（star_map 元数据断言）。"""
+def test_register_version_1_0_4():
+    """@register 版本号更新为 1.0.4（star_map 元数据断言）。"""
     meta = star_map.get(plugin_main.ModelMorph.__module__)
     assert meta is not None
-    assert meta.version == "1.0.3"
+    assert meta.version == "1.0.4"

@@ -225,4 +225,6 @@ CRUD）、引入写操作分级审批（查询/创建/启停自动执行，删�
 管理员 `/scheduler approve|reject` 批准）、新增模型名关键词条件 `model_keyword`
 （all/any/min_n）与 `replace_model` 动作、`/scheduler lockmodel` 强制锁模型（优先级
 最高）、AI 变更审批人性化展示（summary 替代 JSON），并精简 README、把详细更新日志
-统一归入 [CHANGELOG.md](./CHANGELOG.md)。
+统一归入 [CHANGELOG.md](./CHANGELOG.md)；**v1.0.4** 修复 WebUI 新建规则/时间规则把
+空 id 入库导致无法删除、复制、编辑的一族数据完整性缺陷（更新载荷覆盖实体 id 的
+「改名换姓」、存量空 id 实体读时自愈），并为规则优先级做强类型校验。

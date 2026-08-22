@@ -557,6 +557,8 @@ async function saveRule() {
         return;
     }
     const payload = JSON.parse(JSON.stringify(draft));
+    // 新建时 draft.id 为空串：剔除，避免后端把 ``id: ""`` 原样入库（空 id 规则不可删/不可改）。
+    if (!payload.id) delete payload.id;
     try {
         await bridge.apiPost("rules/save", payload);
         showToast(t("pages.model-morph.common.save_success", "保存成功"), "success");

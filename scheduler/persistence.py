@@ -20,7 +20,7 @@ import logging
 import os
 from pathlib import Path
 
-from .migrate import migrate_v1_to_v2
+from .migrate import ensure_entity_ids, migrate_v1_to_v2
 
 logger = logging.getLogger("astrbot_plugin_model_morph")
 
@@ -120,6 +120,7 @@ class ConfigStore:
                 migrated, notes = migrate_v1_to_v2(raw)
                 config = _deep_merge(DEFAULT_CONFIG, migrated)
                 config["schema_version"] = SCHEMA_VERSION
+                ensure_entity_ids(config)  # 顺带补齐空 id 实体（与正常路径同口径）
                 self.save(config)
                 logger.info(
                     "persistence.load: 检测到旧版配置(schema v1)，已自动迁移至 v2。变更: %s",
@@ -130,6 +131,14 @@ class ConfigStore:
             config = _deep_merge(DEFAULT_CONFIG, raw)
             # 固定 schema_version，防止被覆盖成非法值
             config["schema_version"] = SCHEMA_VERSION
+            # 空 id 实体自愈（v1.0.4+）：补齐并落盘一次，之后 id 稳定可删可改。
+            n_fixed = ensure_entity_ids(config)
+            if n_fixed:
+                self.save(config)
+                logger.info(
+                    "persistence.load: 检测到 %d 个空 id 实体，已自动补齐",
+                    n_fixed,
+                )
             self._cache = config
             return config
         except Exception as exc:  # noqa: BLE001 - 损坏文件兜底
@@ -260,5 +269,6 @@ class ConfigStore:
             config = migrated
         merged = _deep_merge(DEFAULT_CONFIG, config)
         merged["schema_version"] = SCHEMA_VERSION
+        ensure_entity_ids(merged)  # 导入配置里空 id 实体一并补齐
         self.save(merged)
         return merged
