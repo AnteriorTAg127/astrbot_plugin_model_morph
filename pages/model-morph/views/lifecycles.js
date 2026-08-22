@@ -349,6 +349,7 @@ async function saveLifecycle() {
         }))
         .filter((s) => !!s.group_id);
     const payload = JSON.parse(JSON.stringify(draft));
+    if (!payload.id) delete payload.id;  // 新建剔除空 id，避免空串 id 入库
     try {
         await bridge.apiPost("lifecycles/save", payload);
         showToast(t("pages.model-morph.common.save_success", "保存成功"), "success");

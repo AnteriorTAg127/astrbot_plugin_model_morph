@@ -1,7 +1,7 @@
 name: astrbot_plugin_model_morph # 插件唯一识别名，以 astrbot_plugin_ 前缀开头
 display_name: Model Morph — 模型自动调度器 # 用于展示的名字，可以是方便人类阅读的名字（需要版本 >= v4.5.0）
 desc: 根据时间、会话、群组、消息事件、上下文状态、轮数等条件，自动决定每个会话当前使用的模型（Provider）组合，实现可视化、可编排、按会话隔离的模型调度。 # 插件简短描述
-version: v1.0.3 # 插件版本号。格式：v1.1.1 或者 v1.1
+version: v1.0.4 # 插件版本号。格式：v1.1.1 或者 v1.1
 author: ModelMorph # 作者
 repo: https://github.com/AnteriorTAg127/astrbot_plugin_model_morph # 插件的仓库地址
 

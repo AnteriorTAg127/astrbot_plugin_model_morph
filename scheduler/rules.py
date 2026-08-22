@@ -121,20 +121,36 @@ def _default_scope() -> dict:
     }
 
 
+def _fresh_rule_id() -> str:
+    """生成一条新规则 id（``r_`` + uuid hex[:8]）。"""
+    return "r_" + uuid.uuid4().hex[:8]
+
+
 def normalize_rule(raw: dict) -> dict:
     """补齐规则缺失字段并返回新 dict（不修改入参）。
 
-    默认：id ``r_`` + uuid hex[:8]；enabled True；priority 0；
-    scope 各 include/exclude 列表为 []；when ``{op:'and', conditions:[]}``；
-    then ``{action:'switch_group', group_id:''}``。
+    默认：id ``r_`` + uuid hex[:8]（**空白 id 视同缺失重新生成**）；enabled True；
+    priority 0；scope 各 include/exclude 列表为 []；
+    when ``{op:'and', conditions:[]}``；then ``{action:'switch_group', group_id:''}``。
     """
     raw = raw or {}
     rule = copy.deepcopy(raw)
 
-    rule.setdefault("id", "r_" + uuid.uuid4().hex[:8])
+    raw_id = rule.get("id")
+    if isinstance(raw_id, str) and raw_id.strip():
+        rule["id"] = raw_id.strip()
+    else:
+        # 空串 / 空白 / 非字符串 id 一律重新生成（WebUI 新建会带 ``id: ""``，
+        # setdefault 无法覆盖已存在的空串键，导致空 id 规则入库不可删/不可改）。
+        rule["id"] = _fresh_rule_id()
     rule.setdefault("name", "")
     rule.setdefault("enabled", True)
-    rule.setdefault("priority", 0)
+    # priority 强转 int（非法回 0）：字符串/空值会让 list_ 排序 TypeError → 全模块 500。
+    if not isinstance(rule.get("priority"), int):
+        try:
+            rule["priority"] = int(rule.get("priority", 0))
+        except (TypeError, ValueError):
+            rule["priority"] = 0
 
     # 作用域：合并默认，保证 6 个键都存在且为列表
     scope = copy.deepcopy(_default_scope())
@@ -634,13 +650,17 @@ class RuleEngine:
 
     # ---- CRUD ----
 
+    def _rules_normalized(self) -> list[dict]:
+        """读取全量规则并逐条 normalize（读时自愈：存量空 id 规则在写操作时被补上真实 id）。"""
+        return [normalize_rule(r) for r in self._store.get_rules()]
+
     def list_(self, only_enabled: bool = False) -> list[dict]:
         """返回全部规则，按 priority 降序（同优先级保持创建顺序）。"""
-        rules = self._store.get_rules()
+        rules = self._rules_normalized()
         ordered = sorted(rules, key=lambda r: r.get("priority", 0), reverse=True)
         if only_enabled:
             ordered = [r for r in ordered if r.get("enabled", True)]
-        return [normalize_rule(r) for r in ordered]
+        return ordered
 
     def create_rule(self, raw: dict) -> dict:
         """新建规则：normalize 后追加并保存，返回新规则。"""
@@ -651,20 +671,25 @@ class RuleEngine:
         return copy.deepcopy(rule)
 
     def update_rule(self, rule_id: str, raw: dict) -> dict | None:
-        """按 id 合并更新规则；不存在返回 None。"""
-        rules = self._store.get_rules()
+        """按 id 合并更新规则；不存在返回 None。
+
+        规则 id 是身份字段，恒以 ``rule_id`` 参数为准，不允许被 ``raw`` 中的
+        ``id`` 字段覆盖（防「更新载荷带空/异 id → 规则改名换姓」）。
+        """
+        rules = self._rules_normalized()
         idx = next((i for i, r in enumerate(rules) if r.get("id") == rule_id), None)
         if idx is None:
             return None
         merged = copy.deepcopy(rules[idx])
         merged.update(copy.deepcopy(raw))
+        merged["id"] = rule_id
         rules[idx] = normalize_rule(merged)
         self._store.update("rules", rules)
         return copy.deepcopy(rules[idx])
 
     def delete(self, rule_id: str) -> bool:
-        """删除规则；存在并删除成功返回 True。"""
-        rules = self._store.get_rules()
+        """删除规则；存在并删除成功返回 True（写回时顺带自愈存量空 id）。"""
+        rules = self._rules_normalized()
         kept = [r for r in rules if r.get("id") != rule_id]
         if len(kept) == len(rules):
             return False
@@ -673,7 +698,7 @@ class RuleEngine:
 
     def duplicate(self, rule_id: str) -> dict | None:
         """复制规则（深拷贝、新 id、name 加 \"(copy)\"）；源不存在返回 None。"""
-        rules = self._store.get_rules()
+        rules = self._rules_normalized()
         src = next((r for r in rules if r.get("id") == rule_id), None)
         if src is None:
             return None

@@ -90,8 +90,12 @@ def normalize_temporal_rule(raw: dict) -> dict:
     raw = raw or {}
     rule = copy.deepcopy(raw)
 
-    # id / 基础字段
-    rule.setdefault("id", "t_" + uuid.uuid4().hex[:8])
+    # id / 基础字段（空白 id 视同缺失重新生成，防 WebUI 新建带 ``id: ""`` 入库成为死规则）
+    raw_id = rule.get("id")
+    if isinstance(raw_id, str) and raw_id.strip():
+        rule["id"] = raw_id.strip()
+    else:
+        rule["id"] = "t_" + uuid.uuid4().hex[:8]
     rule.setdefault("name", "")
     rule.setdefault("enabled", True)
     kind = rule.get("kind")
@@ -532,9 +536,13 @@ class TemporalEngine:
 
     # ---- CRUD ----
 
+    def _rules_normalized(self) -> list[dict]:
+        """读取全量规则并逐条 normalize（读时自愈：存量空 id 规则在写/查操作时补真实 id）。"""
+        return [normalize_temporal_rule(r) for r in self._read_rules()]
+
     def list_(self, only_enabled: bool = False) -> list[dict]:
         """返回全部规则，按 priority 降序（同优先级保持存储顺序）。"""
-        rules = [normalize_temporal_rule(r) for r in self._read_rules()]
+        rules = self._rules_normalized()
         ordered = sorted(rules, key=lambda r: (r.get("priority", 0) or 0), reverse=True)
         if only_enabled:
             ordered = [r for r in ordered if r.get("enabled", True)]
@@ -542,9 +550,9 @@ class TemporalEngine:
 
     def get(self, rule_id: str) -> dict | None:
         """按 id 查规则（深拷贝）；不存在返回 ``None``。"""
-        for rule in self._read_rules():
+        for rule in self._rules_normalized():
             if rule.get("id") == rule_id:
-                return normalize_temporal_rule(rule)
+                return rule
         return None
 
     def create(self, raw: dict) -> dict:
@@ -572,14 +580,18 @@ class TemporalEngine:
     def update_rule(self, rule_id: str, raw: dict) -> dict | None:
         """按 id 合并更新规则；规则不存在返回 ``None``。
 
+        规则 id 是身份字段，恒以 ``rule_id`` 参数为准，不允许被 ``raw`` 中的
+        ``id`` 字段覆盖（防「更新载荷带空/异 id → 规则改名换姓」）。
+
         先 normalize 合并值做整体校验，ok 才写库并失效缓存。
         """
-        rules = self._read_rules()
+        rules = self._rules_normalized()
         idx = next((i for i, r in enumerate(rules) if r.get("id") == rule_id), None)
         if idx is None:
             return None
         merged = copy.deepcopy(rules[idx])
         merged.update(copy.deepcopy(raw))
+        merged["id"] = rule_id
         normalized = normalize_temporal_rule(merged)
         result = self.validate(normalized)
         if not result.get("ok"):
@@ -590,8 +602,8 @@ class TemporalEngine:
         return copy.deepcopy(normalized)
 
     def delete(self, rule_id: str) -> bool:
-        """删除规则；存在并删除成功返回 ``True``（删除后失效缓存）。"""
-        rules = self._read_rules()
+        """删除规则；存在并删除成功返回 ``True``（写回时顺带自愈存量空 id）。"""
+        rules = self._rules_normalized()
         kept = [r for r in rules if r.get("id") != rule_id]
         if len(kept) == len(rules):
             return False
@@ -601,7 +613,7 @@ class TemporalEngine:
 
     def toggle(self, rule_id: str, enabled: bool | None = None) -> dict | None:
         """切换规则启用状态；``enabled`` 为 None 时取反。规则不存在返回 ``None``。"""
-        rules = self._read_rules()
+        rules = self._rules_normalized()
         idx = next((i for i, r in enumerate(rules) if r.get("id") == rule_id), None)
         if idx is None:
             return None
@@ -613,7 +625,7 @@ class TemporalEngine:
         rules[idx]["enabled"] = new_enabled
         self._write_rules(rules)
         self.invalidate()
-        return copy.deepcopy(normalize_temporal_rule(rules[idx]))
+        return copy.deepcopy(rules[idx])
 
     # ---- 校验 ----
 

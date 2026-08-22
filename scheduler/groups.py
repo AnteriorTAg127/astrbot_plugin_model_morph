@@ -171,16 +171,20 @@ class ModelGroupManager:
         Returns:
             模型组 dict 列表。
         """
-        groups = [normalize_group(g) for g in self._store.get_groups()]
+        groups = self._groups_normalized()
         if only_enabled:
             groups = [g for g in groups if g["enabled"]]
         return groups
 
+    def _groups_normalized(self) -> list[dict]:
+        """读取全量模型组并逐条 normalize（读时自愈：存量空 id 组补真实 id）。"""
+        return [normalize_group(g) for g in self._store.get_groups()]
+
     def get(self, group_id: str) -> dict | None:
         """按 id 查模型组（深拷贝）；不存在返回 ``None``。"""
-        for g in self._store.get_groups():
+        for g in self._groups_normalized():
             if g.get("id") == group_id:
-                return normalize_group(g)
+                return g
         return None
 
     def create(self, raw: dict) -> dict:
@@ -194,16 +198,17 @@ class ModelGroupManager:
     def update_group(self, group_id: str, raw: dict) -> dict | None:
         """合并更新模型组：在既有 id/字段基础上用 ``raw`` 覆盖。
 
-        归一化的 ``raw`` 会保留其 id（若 ``raw`` 无 id 则沿用 ``group_id``），再替换原组。
+        组 id 是身份字段，恒以 ``group_id`` 参数为准，不允许被 ``raw`` 中的
+        ``id`` 字段覆盖（防「更新载荷带空/异 id → 组改名换姓，旧引用全失效」）。
         目标组不存在时返回 ``None``。
         """
-        groups = self._store.get_groups()
+        groups = self._groups_normalized()
         for i, g in enumerate(groups):
             if g.get("id") == group_id:
                 merged = copy.deepcopy(g)
                 for k, v in raw.items():
                     merged[k] = copy.deepcopy(v)
-                merged.setdefault("id", group_id)
+                merged["id"] = group_id
                 updated = normalize_group(merged)
                 groups[i] = updated
                 self._store.update("groups", groups)
@@ -211,8 +216,8 @@ class ModelGroupManager:
         return None
 
     def delete(self, group_id: str) -> bool:
-        """删除模型组；存在并删除返回 True，不存在返回 False。"""
-        groups = self._store.get_groups()
+        """删除模型组；存在并删除返回 True，不存在返回 False（写回时顺带自愈存量空 id）。"""
+        groups = self._groups_normalized()
         remaining = [g for g in groups if g.get("id") != group_id]
         if len(remaining) == len(groups):
             return False
